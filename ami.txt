@@ -1,34 +1,32 @@
-Connect to instance Info
-Connect to your instance i-0231b2e76fe88921b (EC03-B17-DEV-SSP-Web-S) using any of these options
+#!/bin/bash
 
+# Move .env file back into correct place then start app
+main(){
 
-EC2 Instance Connect
+    source /root/.bashrc
+    source ~/.nvm/nvm.sh
+    APP_NAME="pos-app-api-af1"
+    cd /opt/project/sources/$APP_NAME/
+    ENV_FILE=".env"
+    TEMP_FILE="/tmp/temp_af1"
 
-Session Manager
+    NEW_VERSION=$(cat version.txt)
+    mv $TEMP_FILE /opt/project/sources/$APP_NAME/$ENV_FILE
 
-SSH client
+    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=$NEW_VERSION/g" $ENV_FILE
 
-EC2 serial console
-Instance ID
+    ls -al 
+    nvm use 18
+    npm install
 
-i-0231b2e76fe88921b (EC03-B17-DEV-SSP-Web-S)
-Connection Type
-Connect using EC2 Instance Connect
-Connect using the EC2 Instance Connect browser-based client, with a public IPv4 or IPv6 address.
-Connect using EC2 Instance Connect Endpoint
-Connect using the EC2 Instance Connect browser-based client, with a private IPv4 address and a VPC endpoint.
-Private IP address
-10.217.15.207
-EC2 Instance Connect Endpoint
-Only endpoints that have completed the creation process can be selected. The process can take up to 15 minutes. If you create an endpoint, refresh this list to check if its in the available state.
-eice-0ae9fb39f9bba7665
+    npm run build 
+    # migrate database with npm
+    echo "Running database migration..." 
+    npm run migrate
+    
 
+    pm2 start $(echo ${APP_NAME}|tr [:lower:] [:upper:])  --update-env
 
-Username
-Enter the username defined in the AMI used to launch the instance. If you didn't define a custom username, use the default username, root.
-root
+}
 
-Max tunnel duration (seconds)
-The maximum allowed duration of the SSH connection. Must comply with the maxTunnelDuration condition (if specified) in the IAM policy.
-3600
-Min 1 second. Max 3600 seconds (1 hour).
+here's my start.sh
