@@ -1,34 +1,69 @@
-#!/bin/bash
-
-# Move .env file back into correct place then start app
-main(){
-
-    source /root/.bashrc
-    source ~/.nvm/nvm.sh
-    APP_NAME="pos-app-api-af1"
-    cd /opt/project/sources/$APP_NAME/
-    ENV_FILE=".env"
-    TEMP_FILE="/tmp/temp_af1"
-
-    NEW_VERSION=$(cat version.txt)
-    mv $TEMP_FILE /opt/project/sources/$APP_NAME/$ENV_FILE
-
-    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=$NEW_VERSION/g" $ENV_FILE
-
-    ls -al 
-    nvm use 18
-    npm install
-
-    npm run build 
-    # migrate database with npm
-    echo "Running database migration..." 
-    npm run migrate
-    
-
-    pm2 start $(echo ${APP_NAME}|tr [:lower:] [:upper:])  --update-env
-
-}
-
-main
-
-there you go
+Developer Tools
+CodeDeploy
+Deployments
+d-U82XDUFMC
+arn:aws:ec2:us-east-1:717667981807:instance/i-0231b2e76fe88921b
+Developer Tools
+CodeDeploy
+Deployments
+d-U82XDUFMC
+arn:aws:ec2:us-east-1:717667981807:instance/i-0231b2e76fe88921b
+arn:aws:ec2:us-east-1:717667981807:instance/i-0231b2e76fe88921b
+Deployment details
+Application
+bnpl-backend-application
+Deployment ID
+d-U82XDUFMC
+Status
+In progress
+Deployment configuration
+CodeDeployDefault.OneAtATime
+Deployment group
+bnpl-backend-application-af1
+Initiated by
+User action
+Deployment description
+Pipeline-URL: 26
+Revision details
+Revision location
+s3://bnpl-code-717667981807/packages/bu-dgt-pos-app-api-aws-app/af1-pos-app-api-4.0.1-26.zip
+Revision created
+17 minutes agoChange 17 minutes ago to UTC+5:30 time formatChange 17 minutes ago to UTC+5:30 time format
+Revision description
+Application revision registered by Deployment ID: d-U82XDUFMC
+Event
+Duration
+Status
+Error code
+Start time
+End time
+ApplicationStop
+less than one second
+Succeeded
+May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
+May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
+DownloadBundle
+2 seconds
+Succeeded
+May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
+May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
+BeforeInstall
+less than one second
+Succeeded
+May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
+May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
+Install
+less than one second
+Succeeded
+May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
+May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
+AfterInstall
+less than one second
+Succeeded
+May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
+May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
+ApplicationStart
+In progress
+May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
+ValidateService
+Pending
