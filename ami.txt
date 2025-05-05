@@ -1,69 +1,34 @@
-Developer Tools
-CodeDeploy
-Deployments
-d-U82XDUFMC
-arn:aws:ec2:us-east-1:717667981807:instance/i-0231b2e76fe88921b
-Developer Tools
-CodeDeploy
-Deployments
-d-U82XDUFMC
-arn:aws:ec2:us-east-1:717667981807:instance/i-0231b2e76fe88921b
-arn:aws:ec2:us-east-1:717667981807:instance/i-0231b2e76fe88921b
-Deployment details
-Application
-bnpl-backend-application
-Deployment ID
-d-U82XDUFMC
-Status
-In progress
-Deployment configuration
-CodeDeployDefault.OneAtATime
-Deployment group
-bnpl-backend-application-af1
-Initiated by
-User action
-Deployment description
-Pipeline-URL: 26
-Revision details
-Revision location
-s3://bnpl-code-717667981807/packages/bu-dgt-pos-app-api-aws-app/af1-pos-app-api-4.0.1-26.zip
-Revision created
-17 minutes agoChange 17 minutes ago to UTC+5:30 time formatChange 17 minutes ago to UTC+5:30 time format
-Revision description
-Application revision registered by Deployment ID: d-U82XDUFMC
-Event
-Duration
-Status
-Error code
-Start time
-End time
-ApplicationStop
-less than one second
-Succeeded
-May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
-May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
-DownloadBundle
-2 seconds
-Succeeded
-May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
-May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
-BeforeInstall
-less than one second
-Succeeded
-May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
-May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
-Install
-less than one second
-Succeeded
-May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
-May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
-AfterInstall
-less than one second
-Succeeded
-May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
-May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
-ApplicationStart
-In progress
-May 5, 2025 8:46 PM (UTC+5:30)Change May 5, 2025 8:46 PM (UTC+5:30) to UTC time formatChange May 5, 2025 8:46 PM (UTC+5:30) to UTC time format
-ValidateService
-Pending
+Connect to instance Info
+Connect to your instance i-0231b2e76fe88921b (EC03-B17-DEV-SSP-Web-S) using any of these options
+
+
+EC2 Instance Connect
+
+Session Manager
+
+SSH client
+
+EC2 serial console
+Instance ID
+
+i-0231b2e76fe88921b (EC03-B17-DEV-SSP-Web-S)
+Connection Type
+Connect using EC2 Instance Connect
+Connect using the EC2 Instance Connect browser-based client, with a public IPv4 or IPv6 address.
+Connect using EC2 Instance Connect Endpoint
+Connect using the EC2 Instance Connect browser-based client, with a private IPv4 address and a VPC endpoint.
+Private IP address
+10.217.15.207
+EC2 Instance Connect Endpoint
+Only endpoints that have completed the creation process can be selected. The process can take up to 15 minutes. If you create an endpoint, refresh this list to check if its in the available state.
+eice-0ae9fb39f9bba7665
+
+
+Username
+Enter the username defined in the AMI used to launch the instance. If you didn't define a custom username, use the default username, root.
+root
+
+Max tunnel duration (seconds)
+The maximum allowed duration of the SSH connection. Must comply with the maxTunnelDuration condition (if specified) in the IAM policy.
+3600
+Min 1 second. Max 3600 seconds (1 hour).
