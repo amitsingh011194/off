@@ -1,1 +1,34 @@
-hey
+#!/bin/bash
+
+# Move .env file back into correct place then start app
+main(){
+
+    source /root/.bashrc
+    source ~/.nvm/nvm.sh
+    APP_NAME="pos-app-api-af1"
+    cd /opt/project/sources/$APP_NAME/
+    ENV_FILE=".env"
+    TEMP_FILE="/tmp/temp_af1"
+
+    NEW_VERSION=$(cat version.txt)
+    mv $TEMP_FILE /opt/project/sources/$APP_NAME/$ENV_FILE
+
+    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=$NEW_VERSION/g" $ENV_FILE
+
+    ls -al 
+    nvm use 18
+    npm install
+
+    npm run build 
+    # migrate database with npm
+    echo "Running database migration..." 
+    npm run migrate
+    
+
+    pm2 start $(echo ${APP_NAME}|tr [:lower:] [:upper:])  --update-env
+
+}
+
+main
+
+there you go
