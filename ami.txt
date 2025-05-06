@@ -1,32 +1,78 @@
+Skip to content
+Unified-Cloud-DevOps
+/
+bu-dgt-pos-app-ui-aws-app
+Search or jump to…
+Type / to search
+Code
+Issues
+Pull requests
+Actions
+Projects
+Wiki
+Security
+Insights
+Settings
+bu-dgt-pos-app-ui-aws-app/cicd/codedeploy-scripts/start.sh
+@mark196920
+mark196920 Merged in feature/fix-env-vars (pull request #1017)
+…
+Latest commit 947f7ce on May 28, 2024
+ History
+ 1 contributor
+executable file  44 lines (37 sloc)  1.37 KB
+ 
+
 #!/bin/bash
 
 # Move .env file back into correct place then start app
 main(){
 
-    source /root/.bashrc
-    source ~/.nvm/nvm.sh
-    APP_NAME="pos-app-api-af1"
+    export PATH=$PATH:/root/.nvm/versions/node/v18.14.0/bin/
+    export NVM_BIN=/root/.nvm/versions/node/v18.14.0/bin
+    export NVM_DIR=/root/.nvm
+    export NVM_INC=/root/.nvm/versions/node/v18.14.0/include/node
+    source $NVM_DIR/nvm.sh
+    APP_NAME="pos-app-ui-TARGET_ENV"
     cd /opt/project/sources/$APP_NAME/
-    ENV_FILE=".env"
-    TEMP_FILE="/tmp/temp_af1"
+    ENV_FILE=".env.local"
+    TEMP_FILE="/tmp/temp_TARGET_ENV"
+    echo "************ ENV***********"
+    env 
+    echo "************ ENV finish ***********"
+    echo $PATH
+    echo "************ PATH finish ***********"
+    VERSION_VARIABLE="NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER="
 
     NEW_VERSION=$(cat version.txt)
     mv $TEMP_FILE /opt/project/sources/$APP_NAME/$ENV_FILE
 
-    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=$NEW_VERSION/g" $ENV_FILE
+    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=$NEW_VERSION/g" $ENV_FILE
 
-    ls -al 
-    nvm use 18
-    npm install
+    # sed -i "s/$VERSION_VARIABLE.*/$VERSION_VARIABLE$NEW_VERSION/g" $ENV_FILE
 
-    npm run build 
-    # migrate database with npm
-    echo "Running database migration..." 
-    npm run migrate
-    
-
-    pm2 start $(echo ${APP_NAME}|tr [:lower:] [:upper:])  --update-env
-
+    rm -rf node_modules
+    ls
+    # echo "************ yarn***********"
+    yarn
+    # echo "************ yarn run Build***********"
+    yarn run build
+    # yarn install 
+    # echo "************ yarn Build finish ***********"
+    # yarn build
+    echo "******** pm2 start ************"
+    pm2 restart $(echo ${APP_NAME}|tr [:lower:] [:upper:]) --update-env
+    ls
+    echo "******** pm2 FINISHED ************"
 }
 
-here's my start.sh
+main
+FooterEXL Unified Cloud
+EXL Unified Cloud avatar
+EXL Unified Cloud
+© 2025 GitHub, Inc.
+Footer navigation
+Help
+Support
+GitHub Enterprise Server 3.12.9
+bu-dgt-pos-app-ui-aws-app/cicd/codedeploy-scripts/start.sh at feature/AF-2245 · Unified-Cloud-DevOps/bu-dgt-pos-app-ui-aws-app
