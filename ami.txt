@@ -1,16 +1,21 @@
 #!/bin/bash
 
 main(){
-    source /root/.bashrc
-    source ~/.nvm/nvm.sh
-    APP_NAME="pos-app-api-TARGET_ENV"
+
+    export PATH=$PATH:/root/.nvm/versions/node/v18.14.0/bin/
+    export NVM_BIN=/root/.nvm/versions/node/v18.14.0/bin
+    export NVM_DIR=/root/.nvm
+    export NVM_INC=/root/.nvm/versions/node/v18.14.0/include/node
+    source $NVM_DIR/nvm.sh
+
+    APP_NAME="pos-app-ui-TARGET_ENV"
     APP_DIR="/opt/project/sources/$APP_NAME"
-    ENV_FILE=".env"
+    ENV_FILE=".env.local"
     TEMP_FILE="/tmp/temp_TARGET_ENV"
 
     echo "Switching to app directory: $APP_DIR"
     cd "$APP_DIR" || { echo "ERROR: Directory $APP_DIR does not exist"; exit 1; }
-    sleep 100
+  
 
     if [ ! -f "$TEMP_FILE" ]; then
         echo "ERROR: Temp .env file not found at $TEMP_FILE"
@@ -25,16 +30,20 @@ main(){
     NEW_VERSION=$(cat version.txt)
     mv "$TEMP_FILE" "$ENV_FILE"
 
-    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=$NEW_VERSION/g" "$ENV_FILE"
+    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=$NEW_VERSION/g" "$ENV_FILE"
 
     echo "Current directory: $(pwd)"
     ls -al
 
-    nvm use 18
+    yarn install || { echo "yarn install failed"; exit 1; }
+    yarn run build || { echo "yarn build failed"; exit 1; }
 
-    if [ ! -f "package.json" ]; then
-        echo "ERROR: package.json not found. Exiting."
-        exit 1
-    fi
+    echo "Starting app with pm2..."
+    pm2 start "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env || {
+        echo "pm2 restart failed"; exit 1;
+    }
 
-    npm install || {
+    echo "Deployment finished successfully."
+}
+
+main
