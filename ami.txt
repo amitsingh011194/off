@@ -138,4 +138,13 @@ main(){
 main
 
 
+--------
+
+
+LifecycleEvent - BeforeInstall
+Script - cicd/codedeploy-scripts/pre_install.sh
+[stdout]Moving .env.local to /tmp/temp_af1
+[stderr]mv: cannot stat '/opt/project/sources/pos-app-ui-af1/.env.local': No such file or directory
+[stdout]ERROR: Failed to move .env.local to /tmp/temp_af1
+
 
