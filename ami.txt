@@ -1,77 +1,101 @@
-Thanks for sharing both scripts — this makes the issue clear.
+#!/bin/bash
 
-### ✅ **What's Happening**
+main(){
+    export PATH=$PATH:/root/.nvm/versions/node/v18.14.0/bin/
+    export NVM_BIN=/root/.nvm/versions/node/v18.14.0/bin
+    export NVM_DIR=/root/.nvm
+    export NVM_INC=/root/.nvm/versions/node/v18.14.0/include/node
+    source $NVM_DIR/nvm.sh
 
-You're using:
+    APP_NAME="pos-app-ui-TARGET_ENV"
+    APP_DIR="/opt/project/sources/$APP_NAME"
+    ENV_FILE=".env.local"
+    TEMP_FILE="/tmp/temp_TARGET_ENV"
 
-```bash
-pm2 start "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env
-```
+    echo "Switching to app directory: $APP_DIR"
+    cd "$APP_DIR" || { echo "ERROR: Directory $APP_DIR does not exist"; exit 1; }
 
-in the **API** script and:
+    if [ ! -f "$TEMP_FILE" ]; then
+        echo "ERROR: Temp .env file not found at $TEMP_FILE"
+        exit 1
+    fi
 
-```bash
-pm2 restart "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env
-```
+    if [ ! -f "version.txt" ]; then
+        echo "ERROR: version.txt not found."
+        exit 1
+    fi
 
-in the **UI** script.
+    NEW_VERSION=$(cat version.txt)
+    mv "$TEMP_FILE" "$ENV_FILE"
 
-But **PM2 needs a command** to know *what* to run. Right now, you're giving it a name but not telling it what script or app to start — so PM2 is defaulting, or misbehaving, often ending up replacing the currently running app (especially with `start`).
+    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=$NEW_VERSION/g" "$ENV_FILE"
 
----
+    echo "Current directory: $(pwd)"
+    ls -al
 
-### 🔥 Problem Root Cause
+    yarn install || { echo "yarn install failed"; exit 1; }
+    yarn run build || { echo "yarn build failed"; exit 1; }
 
-**In the API script**, this line:
+    PM2_NAME=$(echo "${APP_NAME}" | tr '[:lower:]' '[:upper:]')
+    pm2 start yarn --name "$PM2_NAME" -- run start --update-env || {
+        echo "pm2 start failed"; exit 1;
+    }
 
-```bash
-pm2 start "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env
-```
-
-just sets a name, but doesn't tell PM2 what to run (`npm`, `node`, etc.). This causes it to override the currently running process, especially since it has no script associated and may inherit the default process (or error silently).
-
----
-
-### ✅ Fix It Like This
-
-In **both scripts**, you should use something like:
-
-#### For `UI` (assuming `yarn run start` starts the service):
-
-```bash
-PM2_NAME=$(echo "${APP_NAME}" | tr '[:lower:]' '[:upper:]')
-
-pm2 start yarn --name "$PM2_NAME" -- run start --update-env || {
-  echo "pm2 start failed"; exit 1;
+    echo "Deployment finished successfully."
 }
-```
 
-#### For `API` (assuming `npm run start` starts the API):
+main
 
-```bash
-PM2_NAME=$(echo "${APP_NAME}" | tr '[:lower:]' '[:upper:]')
 
-pm2 start npm --name "$PM2_NAME" -- run start --update-env || {
-  echo "pm2 start failed"; exit 1;
+==============================
+
+
+#!/bin/bash
+
+main(){
+    source /root/.bashrc
+    source ~/.nvm/nvm.sh
+    APP_NAME="pos-app-api-TARGET_ENV"
+    APP_DIR="/opt/project/sources/$APP_NAME"
+    ENV_FILE=".env"
+    TEMP_FILE="/tmp/temp_TARGET_ENV"
+
+    echo "Switching to app directory: $APP_DIR"
+    cd "$APP_DIR" || { echo "ERROR: Directory $APP_DIR does not exist"; exit 1; }
+    
+
+    if [ ! -f "$TEMP_FILE" ]; then
+        echo "ERROR: Temp .env file not found at $TEMP_FILE"
+        exit 1
+    fi
+
+    if [ ! -f "version.txt" ]; then
+        echo "ERROR: version.txt not found."
+        exit 1
+    fi
+
+    NEW_VERSION=$(cat version.txt)
+    mv "$TEMP_FILE" "$ENV_FILE"
+
+    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=$NEW_VERSION/g" "$ENV_FILE"
+
+    echo "Current directory: $(pwd)"
+    ls -al
+
+    nvm use 18
+
+    if [ ! -f "package.json" ]; then
+        echo "ERROR: package.json not found. Exiting."
+        exit 1
+    fi
+
+    npm install || { echo "npm install failed"; exit 1; }
+    npm run build || { echo "npm run build failed"; exit 1; }
+
+    echo "Running database migration..."
+    npm run migrate || { echo "npm run migrate failed"; exit 1; }
+
+    pm2 start "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env
 }
-```
 
-### 🔒 Bonus: Only Restart If Already Running
-
-If you'd like to avoid unnecessary restarts and preserve both:
-
-```bash
-if pm2 list | grep -q "$PM2_NAME"; then
-  echo "Restarting $PM2_NAME"
-  pm2 restart "$PM2_NAME" --update-env
-else
-  echo "Starting $PM2_NAME"
-  pm2 start npm --name "$PM2_NAME" -- run start --update-env
-fi
-```
-
-Same logic applies for yarn if you're using that for the frontend.
-
----
-
-Let me know if you'd like this merged into your full `start.sh` files.
+main
