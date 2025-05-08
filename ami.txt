@@ -37,44 +37,17 @@ main(){
     yarn run build || { echo "yarn build failed"; exit 1; }
 
     PM2_NAME=$(echo "${APP_NAME}" | tr '[:lower:]' '[:upper:]')
-    pm2 start yarn --name "$PM2_NAME" -- run start --update-env || {
-        echo "pm2 start failed"; exit 1;
-    }
+
+    # Prevent duplicate PM2 processes
+    if pm2 list | grep -q "$PM2_NAME"; then
+        echo "PM2 process $PM2_NAME found. Restarting..."
+        pm2 restart "$PM2_NAME" --update-env || { echo "pm2 restart failed"; exit 1; }
+    else
+        echo "Starting new PM2 process $PM2_NAME..."
+        pm2 start yarn --name "$PM2_NAME" -- run start --update-env || { echo "pm2 start failed"; exit 1; }
+    fi
 
     echo "Deployment finished successfully."
 }
 
 main
-
-
- sudo su -
-root@EC3-B17-DSP1FE:~# pm2 list
-┌─────┬─────────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
-│ id  │ name                │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
-├─────┼─────────────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
-│ 0   │ POS-APP-API         │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 11  │ POS-APP-API-AF1     │ default     │ 0.39.7  │ fork    │ 0        │ 0      │ 27   │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 20  │ POS-APP-API-AF1     │ default     │ 0.39.7  │ fork    │ 0        │ 0      │ 10   │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 13  │ POS-APP-API-AF2     │ default     │ 0.39.7  │ fork    │ 1519     │ 2D     │ 0    │ online    │ 0%       │ 51.2mb   │ root     │ disabled │
-│ 2   │ POS-APP-API-CICD    │ default     │ N/A     │ fork    │ N/A      │ 0      │ 1782 │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 3   │ POS-APP-API-DEV3    │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 4   │ POS-APP-API-DEV4    │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 5   │ POS-APP-API-DEV5    │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 18  │ POS-APP-API-UCL1    │ default     │ 0.39.7  │ fork    │ 1583     │ 2D     │ 0    │ online    │ 0%       │ 51.1mb   │ root     │ disabled │
-│ 15  │ POS-APP-API-UCL2    │ default     │ 0.39.7  │ fork    │ 0        │ 0      │ 3660 │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 6   │ POS-APP-UI          │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 22  │ POS-APP-UI-AF1      │ default     │ N/A     │ fork    │ 0        │ 0      │ 0    │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 23  │ POS-APP-UI-AF1      │ default     │ N/A     │ fork    │ 1296563  │ 65m    │ 0    │ online    │ 0%       │ 72.4mb   │ root     │ disabled │
-│ 14  │ POS-APP-UI-AF2      │ default     │ 0.39.7  │ fork    │ 1522     │ 2D     │ 0    │ online    │ 0%       │ 51.0mb   │ root     │ disabled │
-│ 10  │ POS-APP-UI-CICD     │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 7   │ POS-APP-UI-DEV3     │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 8   │ POS-APP-UI-DEV4     │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 9   │ POS-APP-UI-DEV5     │ default     │ N/A     │ fork    │ N/A      │ 0      │ 0    │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 16  │ POS-APP-UI-UCL1     │ default     │ 0.39.7  │ fork    │ 1556     │ 2D     │ 0    │ online    │ 0%       │ 50.9mb   │ root     │ disabled │
-│ 17  │ POS-APP-UI-UCL2     │ default     │ 0.39.7  │ fork    │ 0        │ 0      │ 983  │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-│ 1   │ POS-APP-UI-V3       │ default     │ N/A     │ fork    │ 0        │ 0      │ 0    │ stopped   │ 0%       │ 0b       │ root     │ disabled │
-└─────┴─────────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
-[PM2][WARN] Current process list is not synchronized with saved list. Type 'pm2 save' to synchronize.
-root@EC3-B17-DSP1FE:~#
-
-
