@@ -148,3 +148,106 @@ Script - cicd/codedeploy-scripts/pre_install.sh
 [stdout]ERROR: Failed to move .env.local to /tmp/temp_af1
 
 
+
+#!/bin/bash
+
+main(){
+
+    export PATH=$PATH:/root/.nvm/versions/node/v18.14.0/bin/
+    export NVM_BIN=/root/.nvm/versions/node/v18.14.0/bin
+    export NVM_DIR=/root/.nvm
+    export NVM_INC=/root/.nvm/versions/node/v18.14.0/include/node
+    source $NVM_DIR/nvm.sh
+
+    APP_NAME="pos-app-ui-af1"
+    APP_DIR="/opt/project/sources/$APP_NAME"
+    ENV_FILE=".env.local"
+    TEMP_FILE="/tmp/temp_af1"
+
+    echo "Switching to app directory: $APP_DIR"
+    cd "$APP_DIR" || { echo "ERROR: Directory $APP_DIR does not exist"; exit 1; }
+
+    if [ ! -f "$TEMP_FILE" ]; then
+        echo "ERROR: Temp .env file not found at $TEMP_FILE"
+        exit 1
+    fi
+
+    if [ ! -f "version.txt" ]; then
+        echo "ERROR: version.txt not found."
+        exit 1
+    fi
+
+    NEW_VERSION=$(cat version.txt)
+    mv "$TEMP_FILE" "$ENV_FILE"
+
+    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=$NEW_VERSION/g" "$ENV_FILE"
+
+    echo "Current directory: $(pwd)"
+    ls -al
+
+    yarn install || { echo "yarn install failed"; exit 1; }
+    yarn run build || { echo "yarn build failed"; exit 1; }
+
+    echo "Starting app with pm2..."
+    pm2 restart "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env || {
+        echo "pm2 restart failed"; exit 1;
+    }
+
+    echo "Deployment finished successfully."
+}
+
+main
+
+=====================
+
+
+#!/bin/bash
+
+main(){
+
+    export PATH=$PATH:/root/.nvm/versions/node/v18.14.0/bin/
+    export NVM_BIN=/root/.nvm/versions/node/v18.14.0/bin
+    export NVM_DIR=/root/.nvm
+    export NVM_INC=/root/.nvm/versions/node/v18.14.0/include/node
+    source $NVM_DIR/nvm.sh
+
+    APP_NAME="pos-app-ui-af1"
+    APP_DIR="/opt/project/sources/$APP_NAME"
+    ENV_FILE=".env.local"
+    TEMP_FILE="/tmp/temp_af1"
+
+    echo "Switching to app directory: $APP_DIR"
+    cd "$APP_DIR" || { echo "ERROR: Directory $APP_DIR does not exist"; exit 1; }
+
+    if [ ! -f "$TEMP_FILE" ]; then
+        echo "ERROR: Temp .env file not found at $TEMP_FILE"
+        exit 1
+    fi
+
+    if [ ! -f "version.txt" ]; then
+        echo "ERROR: version.txt not found."
+        exit 1
+    fi
+
+    NEW_VERSION=$(cat version.txt)
+    mv "$TEMP_FILE" "$ENV_FILE"
+
+    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=$NEW_VERSION/g" "$ENV_FILE"
+
+    echo "Current directory: $(pwd)"
+    ls -al
+
+    yarn install || { echo "yarn install failed"; exit 1; }
+    yarn run build || { echo "yarn build failed"; exit 1; }
+
+    echo "Starting app with pm2..."
+    pm2 restart "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env || {
+        echo "pm2 restart failed"; exit 1;
+    }
+
+    echo "Deployment finished successfully."
+}
+
+main
+
+
