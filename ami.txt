@@ -117,3 +117,25 @@ main(){
 main
 
 
+#!/bin/bash
+
+# Move .env file to temporary location for install
+
+main(){
+    APP_NAME="pos-app-ui-af1"
+    ENV_FILE=".env.local"
+    TEMP_FILE="/tmp/temp_af1"
+
+    echo "Moving $ENV_FILE to $TEMP_FILE"
+    mv /opt/project/sources/$APP_NAME/$ENV_FILE $TEMP_FILE || {
+        echo "ERROR: Failed to move $ENV_FILE to $TEMP_FILE"; exit 1;
+    }
+
+    echo "Cleaning up old src and public directories..."
+    rm -rf /opt/project/sources/$APP_NAME/src /opt/project/sources/$APP_NAME/public
+}
+
+main
+
+
+
