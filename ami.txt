@@ -1,19 +1,16 @@
 #!/bin/bash
 
 main(){
-    export PATH=$PATH:/root/.nvm/versions/node/v18.14.0/bin/
-    export NVM_BIN=/root/.nvm/versions/node/v18.14.0/bin
-    export NVM_DIR=/root/.nvm
-    export NVM_INC=/root/.nvm/versions/node/v18.14.0/include/node
-    source $NVM_DIR/nvm.sh
-
-    APP_NAME="pos-app-ui-TARGET_ENV"
+    source /root/.bashrc
+    source ~/.nvm/nvm.sh
+    APP_NAME="pos-app-api-TARGET_ENV"
     APP_DIR="/opt/project/sources/$APP_NAME"
-    ENV_FILE=".env.local"
+    ENV_FILE=".env"
     TEMP_FILE="/tmp/temp_TARGET_ENV"
 
     echo "Switching to app directory: $APP_DIR"
     cd "$APP_DIR" || { echo "ERROR: Directory $APP_DIR does not exist"; exit 1; }
+    sleep 100
 
     if [ ! -f "$TEMP_FILE" ]; then
         echo "ERROR: Temp .env file not found at $TEMP_FILE"
@@ -28,26 +25,25 @@ main(){
     NEW_VERSION=$(cat version.txt)
     mv "$TEMP_FILE" "$ENV_FILE"
 
-    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=$NEW_VERSION/g" "$ENV_FILE"
+    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=$NEW_VERSION/g" "$ENV_FILE"
 
     echo "Current directory: $(pwd)"
     ls -al
 
-    yarn install || { echo "yarn install failed"; exit 1; }
-    yarn run build || { echo "yarn build failed"; exit 1; }
+    nvm use 18
 
-    PM2_NAME=$(echo "${APP_NAME}" | tr '[:lower:]' '[:upper:]')
-
-    # Prevent duplicate PM2 processes
-    if pm2 list | grep -q "$PM2_NAME"; then
-        echo "PM2 process $PM2_NAME found. Restarting..."
-        pm2 restart "$PM2_NAME" --update-env || { echo "pm2 restart failed"; exit 1; }
-    else
-        echo "Starting new PM2 process $PM2_NAME..."
-        pm2 start yarn --name "$PM2_NAME" -- run start --update-env || { echo "pm2 start failed"; exit 1; }
+    if [ ! -f "package.json" ]; then
+        echo "ERROR: package.json not found. Exiting."
+        exit 1
     fi
 
-    echo "Deployment finished successfully."
+    npm install || { echo "npm install failed"; exit 1; }
+    npm run build || { echo "npm run build failed"; exit 1; }
+
+    echo "Running database migration..."
+    npm run migrate || { echo "npm run migrate failed"; exit 1; }
+
+    pm2 restart "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env
 }
 
 main
