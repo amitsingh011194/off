@@ -1,21 +1,77 @@
-✅ Fix It Like This
-In both scripts, you should use something like:
+Thanks for sharing both scripts — this makes the issue clear.
 
-For UI (assuming yarn run start starts the service):
-bash
-Copy
-Edit
+### ✅ **What's Happening**
+
+You're using:
+
+```bash
+pm2 start "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env
+```
+
+in the **API** script and:
+
+```bash
+pm2 restart "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env
+```
+
+in the **UI** script.
+
+But **PM2 needs a command** to know *what* to run. Right now, you're giving it a name but not telling it what script or app to start — so PM2 is defaulting, or misbehaving, often ending up replacing the currently running app (especially with `start`).
+
+---
+
+### 🔥 Problem Root Cause
+
+**In the API script**, this line:
+
+```bash
+pm2 start "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env
+```
+
+just sets a name, but doesn't tell PM2 what to run (`npm`, `node`, etc.). This causes it to override the currently running process, especially since it has no script associated and may inherit the default process (or error silently).
+
+---
+
+### ✅ Fix It Like This
+
+In **both scripts**, you should use something like:
+
+#### For `UI` (assuming `yarn run start` starts the service):
+
+```bash
 PM2_NAME=$(echo "${APP_NAME}" | tr '[:lower:]' '[:upper:]')
 
 pm2 start yarn --name "$PM2_NAME" -- run start --update-env || {
   echo "pm2 start failed"; exit 1;
 }
-For API (assuming npm run start starts the API):
-bash
-Copy
-Edit
+```
+
+#### For `API` (assuming `npm run start` starts the API):
+
+```bash
 PM2_NAME=$(echo "${APP_NAME}" | tr '[:lower:]' '[:upper:]')
 
 pm2 start npm --name "$PM2_NAME" -- run start --update-env || {
   echo "pm2 start failed"; exit 1;
 }
+```
+
+### 🔒 Bonus: Only Restart If Already Running
+
+If you'd like to avoid unnecessary restarts and preserve both:
+
+```bash
+if pm2 list | grep -q "$PM2_NAME"; then
+  echo "Restarting $PM2_NAME"
+  pm2 restart "$PM2_NAME" --update-env
+else
+  echo "Starting $PM2_NAME"
+  pm2 start npm --name "$PM2_NAME" -- run start --update-env
+fi
+```
+
+Same logic applies for yarn if you're using that for the frontend.
+
+---
+
+Let me know if you'd like this merged into your full `start.sh` files.
