@@ -101,3 +101,25 @@ main(){
 }
 
 main
+
+
+
+ 
+
+#!/bin/bash
+
+# Move .env file to temporary location for install
+
+main(){
+    unset $APP_NAME
+    APP_NAME="pos-app-ui-TARGET_ENV"
+    ENV_FILE=".env.local"
+    TEMP_FILE="/tmp/temp_TARGET_ENV"
+
+    mv /opt/project/sources/$APP_NAME/$ENV_FILE $TEMP_FILE
+
+    rm -rf src public
+ 
+}
+
+main
