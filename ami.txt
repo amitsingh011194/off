@@ -1,125 +1,295 @@
 #!/bin/bash
 
-main(){
 
-    export PATH=$PATH:/root/.nvm/versions/node/v18.14.0/bin/
-    export NVM_BIN=/root/.nvm/versions/node/v18.14.0/bin
-    export NVM_DIR=/root/.nvm
-    export NVM_INC=/root/.nvm/versions/node/v18.14.0/include/node
-    source $NVM_DIR/nvm.sh
+# Check if three command-line arguments are provided
+if [ "$#" -ne 1 ]; then
+ echo "-- Error: Provide lambda version to build"
+ echo "-- Usage: $0 "
+ exit 1
+fi
 
-    APP_NAME="pos-app-ui-TARGET_ENV"
-    APP_DIR="/opt/project/sources/$APP_NAME"
-    ENV_FILE=".env.local"
-    TEMP_FILE="/tmp/temp_TARGET_ENV"
+# Zip File naming
+VERSION=$1
+echo $VERSION
 
-    echo "Switching to app directory: $APP_DIR"
-    cd "$APP_DIR" || { echo "ERROR: Directory $APP_DIR does not exist"; exit 1; }
-  
+APP_DIR="$(pwd)/bu-dgt-paymentor-core-aws-app/application"
 
-    if [ ! -f "$TEMP_FILE" ]; then
-        echo "ERROR: Temp .env file not found at $TEMP_FILE"
-        exit 1
-    fi
+# Define the S3 bucket and prefix
+S3_BUCKET="${AWS_ACCOUNT_ID}-paymentor-tf-state-mgmt"
+S3_PREFIX="artifacts/${TENANT_ID}/${VERSION}"
 
-    if [ ! -f "version.txt" ]; then
-        echo "ERROR: version.txt not found."
-        exit 1
-    fi
+#
+# Zip Lambdas
+#
 
-    NEW_VERSION=$(cat version.txt)
-    mv "$TEMP_FILE" "$ENV_FILE"
+build_java_lambda(){
+ cd ${APP_DIR}/lambdas/CommunicationIVREventsSaveAudio/
 
-    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_FE_BUILD_NUMBER=$NEW_VERSION/g" "$ENV_FILE"
+ echo "Running Maven build inside Docker..."
 
-    echo "Current directory: $(pwd)"
-    ls -al
+ DOCKER_IMAGE="maven:3.9.8-amazoncorretto-11"
+ WORKSPACE_DIR="$(pwd)"
+ MAVEN_COMMAND="mvn clean package"
 
-    yarn install || { echo "yarn install failed"; exit 1; }
-    yarn run build || { echo "yarn build failed"; exit 1; }
+ docker run --rm \
+ -u $(id -u):$(id -g) \
+ -v "${WORKSPACE_DIR}:/usr/src/app" \
+ -w /usr/src/app \
+ "${DOCKER_IMAGE}" \
+ bash -c "${MAVEN_COMMAND}"
 
-    echo "Starting app with pm2..."
-    pm2 start "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env || {
-        echo "pm2 restart failed"; exit 1;
-    }
+ echo "Maven build completed successfully."
 
-    echo "Deployment finished successfully."
+ ls -l *
+
+ cp target/kv-audio-lambda-project-1.0-SNAPSHOT.jar ${WORK_DIR}/lambdas
 }
 
-main
+build_lambdas(){
+ cd ${APP_DIR}/lambdas
 
-
-======================
-
-
-
-#!/bin/bash
-
-main(){
-    source /root/.bashrc
-    source ~/.nvm/nvm.sh
-    APP_NAME="pos-app-api-TARGET_ENV"
-    APP_DIR="/opt/project/sources/$APP_NAME"
-    ENV_FILE=".env"
-    TEMP_FILE="/tmp/temp_TARGET_ENV"
-
-    echo "Switching to app directory: $APP_DIR"
-    cd "$APP_DIR" || { echo "ERROR: Directory $APP_DIR does not exist"; exit 1; }
-
-    if [ ! -f "$TEMP_FILE" ]; then
-        echo "ERROR: Temp .env file not found at $TEMP_FILE"
-        exit 1
-    fi
-
-    if [ ! -f "version.txt" ]; then
-        echo "ERROR: version.txt not found."
-        exit 1
-    fi
-
-    NEW_VERSION=$(cat version.txt)
-    mv "$TEMP_FILE" "$ENV_FILE"
-
-    sed -i "s/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=.*/NEXT_PUBLIC_SSP_UI_FNBO_BE_BUILD_NUMBER=$NEW_VERSION/g" "$ENV_FILE"
-
-    echo "Current directory: $(pwd)"
-    ls -al
-
-    nvm use 18
-
-    if [ ! -f "package.json" ]; then
-        echo "ERROR: package.json not found. Exiting."
-        exit 1
-    fi
-
-    npm install || { echo "npm install failed"; exit 1; }
-    npm run build || { echo "npm run build failed"; exit 1; }
-
-    echo "Running database migration..."
-    npm run migrate || { echo "npm run migrate failed"; exit 1; }
-
-    pm2 restart "$(echo ${APP_NAME} | tr '[:lower:]' '[:upper:]')" --update-env
+ echo "Zipping Lambdas"
+ for lambda_name in `ls`; do
+ zip -r "${WORK_DIR}/lambdas/$lambda_name-${VERSION}.zip" "$lambda_name"
+ done
+ echo "Zipping complete!"
 }
 
-main
+build_lex_bots(){
+ cd ${APP_DIR}/lex
 
+ cp -r * ${WORK_DIR}/lex
+}
 
+build_flyway_scripts(){
+ cd ${APP_DIR}/db
 
+ cp *.sql ${WORK_DIR}/flyway
+}
+
+cleanup(){
+ echo "--- Deleting ${WORK_DIR}"
+ rm -rf ${WORK_DIR}
+}
+
+main(){
+ # Setup the tmp dir
+ WORK_DIR=$(mktemp -d)
+ trap cleanup EXIT # Delete temp dir on the way out
+
+ cd ${WORK_DIR}
+ mkdir lambdas lex flyway
+
+ if ${BUILD_JAVA_LAMBDA}; then
+ build_java_lambda
+ fi
+
+ build_lambdas
+ build_lex_bots
+ build_flyway_scripts
  
+ ls -l ${WORK_DIR}/*
 
-#!/bin/bash
-
-# Move .env file to temporary location for install
-
-main(){
-    unset $APP_NAME
-    APP_NAME="pos-app-ui-TARGET_ENV"
-    ENV_FILE=".env.local"
-    TEMP_FILE="/tmp/temp_TARGET_ENV"
-
-    mv /opt/project/sources/$APP_NAME/$ENV_FILE $TEMP_FILE
-
-    rm -rf src public
- 
+ #
+ # Ship to S3
+ #
+ echo "Shipping zips to S3"
+ aws s3 sync ${WORK_DIR} "s3://${S3_BUCKET}/${S3_PREFIX}/"
+ echo "Shipping complete!"
 }
-
 main
+
+what deos this code do?
+
+This Bash script is designed to automate the process of building, packaging, and deploying AWS Lambda functions, Lex bots, and Flyway database migration scripts. Here's a breakdown of what each part does:
+
+Argument Check:
+
+Ensures that exactly one command-line argument (the version) is provided. If not, it displays an error message and usage instructions.
+Variable Initialization:
+
+Sets up variables for the version, application directory, S3 bucket, and S3 prefix.
+Function Definitions:
+
+build_java_lambda:
+Navigates to the directory containing the Java Lambda function.
+Runs a Maven build inside a Docker container to package the Lambda function.
+Copies the resulting JAR file to a temporary working directory.
+build_lambdas:
+Zips all Lambda function directories and stores the zip files in the temporary working directory.
+build_lex_bots:
+Copies Lex bot configurations to the temporary working directory.
+build_flyway_scripts:
+Copies Flyway SQL migration scripts to the temporary working directory.
+cleanup:
+Deletes the temporary working directory.
+Main Function:
+
+Creates a temporary working directory and sets up a trap to clean it up on exit.
+Creates subdirectories for Lambdas, Lex bots, and Flyway scripts within the temporary working directory.
+Calls the functions to build and package the Java Lambda, other Lambdas, Lex bots, and Flyway scripts.
+Lists the contents of the temporary working directory.
+Syncs the contents of the temporary working directory to an S3 bucket.
+Execution:
+
+The main function is called to execute the script.
+This script is useful for automating the build and deployment process, ensuring consistency and saving time. Do you have any specific questions about it?
+
+
+
+
+
+AI-generated content may be incorrect
+You said:
+
+yeah, so we are planning to maintain a version.txt file where we will be maintaing version or tagging versions while uploading zip lambda functions to the S3 bucket. and then terrafrom should be able to only update the Lambda functions whose packages have chaneged since we have s3 sync :     aws s3 sync ${WORK_DIR} "s3://${S3_BUCKET}/${S3_PREFIX}/"
+
+and it lets the develop the manage the version file where their lambda code or lambda functions also exist.
+
+but if they do ask us to add  build number also at the end of the version provided in the version file then that would technically always be changing and that would always cause everything to be re-uploaded every time.
+
+Copilot said:
+Copilot
+It sounds like you're aiming to optimize the deployment process by ensuring only changed Lambda functions are updated, using a version.txt file to track versions. However, adding a build number that changes with every build would indeed cause all files to be re-uploaded, defeating the purpose of minimizing uploads.
+
+Here are a few suggestions to address this:
+
+Separate Version and Build Number:
+
+Maintain the version in the version.txt file without the build number.
+Use a separate mechanism to track the build number, such as a build.txt file or environment variable.
+Conditional Sync:
+
+Modify the script to check if the version has changed before syncing. This way, only changed Lambda functions are uploaded.
+Example:
+
+Hash-Based Comparison:
+
+Instead of relying on version numbers, use file hashes to determine if a Lambda function has changed.
+Generate a hash for each Lambda function and compare it with the previous hash stored in S3.
+Example:
+
+Selective Sync:
+
+Use the --exclude and --include options with aws s3 sync to selectively sync only the changed files.
+Example:
+
+By implementing one of these strategies, you can maintain efficient deployments without unnecessary uploads. Let me know if you need further details or assistance with any of these approaches!
+
+
+
+
+
+AI-generated content may be incorrect
+You said:
+
+yeahh you got it right? could you also explain me what are we trying to do here 
+Copilot said:
+Copilot
+Absolutely! Let's break down what you're aiming to achieve:
+
+Objective:
+You want to maintain a version.txt file to track the versions of your Lambda functions and ensure that only the Lambda functions that have changed are updated in your S3 bucket. This helps in optimizing the deployment process by avoiding unnecessary uploads.
+
+Current Challenge:
+If you include a build number in the version, it changes with every build, causing all files to be re-uploaded every time, which is not efficient.
+
+Proposed Solution:
+Maintain Version Separately:
+
+Keep the version number in the version.txt file without the build number.
+Track the build number separately, either in a different file or as an environment variable.
+Conditional Sync:
+
+Before syncing to S3, check if the version has changed. If it hasn't, skip the sync to avoid unnecessary uploads.
+Example:
+
+Hash-Based Comparison:
+
+Use file hashes to determine if a Lambda function has changed. This is more precise than version numbers.
+Generate a hash for each Lambda function and compare it with the previous hash stored in S3.
+Example:
+
+Selective Sync:
+
+Use the --exclude and --include options with aws s3 sync to selectively sync only the changed files.
+Example:
+
+Summary:
+By implementing these strategies, you can ensure that only the Lambda functions that have changed are uploaded to S3, making your deployment process more efficient and manageable. This approach helps in maintaining version control while avoiding unnecessary uploads.
+
+Does this make sense? Would you like to dive deeper into any specific part of the solution?
+
+
+
+
+
+AI-generated content may be incorrect
+You said:
+
+what do you mean by version of your lambda functions?>
+Copilot said:
+Copilot
+When we talk about the "version" of your Lambda functions, we're referring to a specific identifier that helps track changes and updates to the code over time. This versioning is crucial for several reasons:
+
+Purpose of Versioning:
+Tracking Changes:
+
+Each version represents a snapshot of the code at a particular point in time. This helps in tracking what changes were made, when they were made, and by whom.
+Rollback Capability:
+
+If a new version introduces bugs or issues, you can easily roll back to a previous stable version.
+Deployment Management:
+
+Versioning helps in managing deployments by ensuring that only the updated or changed Lambda functions are deployed, thus optimizing the process.
+Consistency:
+
+It ensures consistency across different environments (development, staging, production) by deploying the same version of the code.
+How It Works:
+Version Number: Typically, a version number might look like v1.0, v1.1, v2.0, etc. This number is incremented based on the changes made to the code.
+Version File: A version.txt file can be used to store the current version number. This file is updated whenever changes are made to the Lambda functions.
+Build Number: Sometimes, a build number is added to the version to indicate the specific build of the code, like v1.0.123, where 123 is the build number.
+Example:
+Imagine you have a Lambda function that processes user data. You start with version v1.0. After making some improvements, you update the version to v1.1. If you add a new feature, you might update it to v2.0. Each of these versions helps you keep track of the changes and ensures that you can manage deployments effectively.
+
+By maintaining a versioning system, you can ensure that your Lambda functions are always up-to-date and that you can easily identify and manage changes.
+
+Does this help clarify what we mean by the version of your Lambda functions? 😊
+
+
+
+
+
+AI-generated content may be incorrect
+You said:
+
+Okay so the developer is insisting to have the Build number as well added at the end of the version provoided in the version.txt file when running the job 
+
+so for eg, when running the job, the version would become 1.2.3-${BUILD_NUMBER}
+
+Which will cause the version number to change every time and also will run the upload again and again, making sense?
+
+Copilot said:
+Copilot
+Yes, that makes sense. Including the build number in the version string (e.g., 1.2.3-${BUILD_NUMBER}) will indeed cause the version to change with every build, leading to all files being re-uploaded each time. This can be inefficient, especially if the actual Lambda function code hasn't changed.
+
+Possible Solutions:
+Selective Sync Based on File Changes:
+
+Instead of relying solely on the version number, you can implement a mechanism to check if the actual Lambda function files have changed before uploading.
+Use file hashes to determine changes:
+
+Conditional Sync Based on Version Change:
+
+Check if the version (excluding the build number) has changed before syncing. If it hasn't, skip the sync.
+Example:
+
+Environment Variable for Build Number:
+
+Use an environment variable to track the build number separately and only update the version file with the base version.
+Example:
+
+Summary:
+By implementing one of these strategies, you can ensure that only the Lambda functions that have actually changed are uploaded to S3, making your deployment process more efficient. This approach allows you to include the build number for tracking purposes without causing unnecessary uploads.
+
+Would you like to explore any of these solutions further or need help with implementing them? 😊
