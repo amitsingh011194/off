@@ -1,1 +1,111 @@
+https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-dgt-ssp-api-aws-app/blob/develop/apps/techops/src/main.ts
 
+export const handler: Handler = async (
+  event: any,
+  context: Context,
+  callback: Callback
+) => {
+  server = server || (await bootstrap());
+
+  try {
+    // Check if the event is from Eventbridge
+    const orgBody = event?.body ? event.body : event;
+    let body =
+      orgBody && orgBody !== '' && typeof orgBody === 'string'
+        ? JSON.parse(orgBody)
+        : orgBody;
+
+    const isSqsEvent = body?.Records && body?.Records?.length > 0;
+
+    if (isSqsEvent) {
+      body =
+        typeof body?.Records[0].body === 'string'
+          ? JSON.parse(body?.Records[0].body)
+          : body?.Records[0].body;
+    }
+    const process = body?.process;
+
+    if (process !== undefined) {
+      const appContext = await NestFactory.createApplicationContext(
+        TechopsModule
+      );
+      const processName = process?.toUpperCase();
+      let appService;
+      let response;
+
+      switch (processName) {
+        case ReportTypeEnum.APPLY_FINANCE_FEE:
+          appService = await appContext.get(ApplyFinanceFeeController);
+          response = appService.applyFinanceFeeToLoan(event);
+          break;
+        case ReportTypeEnum.FILE_TRANSFER:
+          appService = await appContext.get(FileTransferController);
+          response = appService.transferFiles(event);
+          break;
+        case ReportTypeEnum.FILE_TRANSFER_GET:
+          appService = await appContext.get(FileTransferController);
+          response = appService.conduentTransfmissionGet(event);
+          break;
+        case ReportTypeEnum.CLEAN_UP:
+          appService = await appContext.get(CleanUpController);
+          response = appService.cleanUpHandler(event);
+          break;
+        case ReportTypeEnum.SCHEDULED_ACH:
+          appService = await appContext.get(ScheduledAchService);
+          response = await appService.main(event);
+          break;
+        case ReportTypeEnum.DAILY_LOAN_FILE:
+          appService = await appContext.get(DailyLoanFileService);
+          response = await appService.loadDailyData(event);
+          break;
+        case ReportTypeEnum.DAILY_LOAN_FILE_BATCH:
+          appService = await appContext.get(DailyLoanFileService);
+          response = await appService.batchHandler(event);
+          break;
+        case ReportTypeEnum.FILE_GENERATE:
+          appService = await appContext.get(FileGenerationController);
+          response = appService.main(event);
+          break;
+        case ReportTypeEnum.APPLY_PAYMENT_TO_LOC:
+          appService = await appContext.get(ApplyPaymentToLocController);
+          response = await appService.applyPaymentToLOC(event);
+          break;
+        case ReportTypeEnum.DB_REFRESH:
+          appService = await appContext.get(DbRefreshController);
+          response = await appService.main(event);
+          break;
+        case ReportTypeEnum.UTILITY:
+          appService = await appContext.get(UtilityService);
+          response = await appService.main(event);
+          break;
+        case ReportTypeEnum.CONTROL_CHECK_INPUT_FILE:
+          appService = await appContext.get(ControlCheckProcessController);
+          response = await appService.controlCheckData(event);
+          break;
+        case ReportTypeEnum.FETCH_AGREEMENTS:
+          appService = await appContext.get(FetchAgreementsController);
+          response = await appService.main(event);
+          break;
+        default:
+          appService = await appContext.get(TechopsService);
+          response = appService.main();
+          break;
+      }
+
+      return response;
+    } else {
+      console.log(`* No process found matching ${body?.process}`);
+    }
+  } catch (error) {
+    console.log('🚀 ~ error - main.ts: 122:', error);
+  }
+  return server(event, context, callback);
+};
+FooterEXL Unified Cloud
+EXL Unified Cloud avatar
+EXL Unified Cloud
+© 2025 GitHub, Inc.
+Footer navigation
+Help
+Support
+GitHub Enterprise Server 3.12.9
