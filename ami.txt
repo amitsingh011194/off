@@ -590,7 +590,21 @@ functions:
 
 -------
 
-when something uploading to folder location nf-tops-dev-s3-dps/clients/moneyjet/achreturns/ 
+when something uploading to folder location nf-tops-dev-s3-dps/clients/moneyjet/achreturns/
+
+=======
+
+ events:
+      - s3:
+          # The S3 bucket name is dynamically loaded from SSM Parameter Store
+          bucket: ${ssm:/CUSTOMER/BITBUCKET_REPO_SLUG/TARGET_ENVIRONMENT/SSP_API_S3_BUCKET_SSP_FILES}
+          # This triggers the Lambda for all object creation events (Put, Post, Copy, MultipartUpload)
+          event: s3:ObjectCreated:*
+          # Set to 'true' because your bucket likely already exists and is managed outside Serverless
+          existing: true
+          # Only trigger for objects created in the specified folder path
+          rules:
+            - prefix: nf-tops-dev-s3-dps/clients/moneyjet/achreturns/
 
 
 
