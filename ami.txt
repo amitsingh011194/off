@@ -1,20 +1,25 @@
-17:05:22  cls = <class 'pages.test_encrypt.PageEncrypt'>
-17:05:22  
-17:05:22      @classmethod
-17:05:22      def load_config(cls):
-17:05:22          # Assumes this file is in pages/, config.yaml is in workspace root
-17:05:22          workspace_root = os.environ.get('WORKSPACE', os.getcwd())
-17:05:22          config_path = os.path.join(workspace_root, 'config.yaml')
-17:05:22  >       with open(config_path) as f:
-17:05:22               ^^^^^^^^^^^^^^^^^
-17:05:22  E       FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/config.yaml'
-17:05:22  
-17:05:22  pages/test_encrypt.py:18: FileNotFoundError
-17:05:22  - Generated html report: file:///home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/reports/Report_pgpencryption_2025-07-02_11-35-16.html -
-17:05:22  =========================== short test summary info ============================
-17:05:22  FAILED steps/test_encrypt_steps.py::test_encrypt_all_csv_files_in_a_directory_and_save_the_encrypted_output - FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/config.yaml'
-17:05:22  ======================= 1 failed, 8 deselected in 0.26s ========================
-17:05:22  Test run for tag 'pgpencryption' complete. Exit code: 1
-17:05:22  HTML report generated at: reports/Report_pgpencryption_2025-07-02_11-35-16.html
-17:05:22  Waiting 5 seconds before running next tag...
-17:05:22  
+17:11:23  /usr/lib/python3.12/ast.py:52: in parse
+17:11:23      return compile(source, filename, mode, flags,
+17:11:23  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/test_encrypt.py", line 17
+17:11:23  E       workspace_root = os.environ.get('WORKSPACE', os.getcwd())
+17:11:23  E       ^^^^^^^^^^^^^^
+17:11:23  E   IndentationError: expected an indented block after function definition on line 14
+17:11:23  - Generated html report: file:///home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/reports/Report_pgpencryption_2025-07-02_11-41-16.html -
+
+
+
+
+class PageEncrypt:
+    def __init__(self, config):
+        self.key_file = config['pgp_public_key']
+        self.csv_dir = config['csv_data_dir']
+        self.enc_dir = config['encryption_dir']
+        self.file_list = glob.glob(os.path.join(self.csv_dir, "*.csv"))
+        
+    @classmethod
+    def load_config(cls):
+        # Assumes this file is in pages/, config.yaml is two levels up
+       workspace_root = os.environ.get('WORKSPACE', os.getcwd())
+       config_path = os.path.join(workspace_root, 'config.yaml')
+        with open(config_path) as f:
+            return yaml.safe_load(f)
