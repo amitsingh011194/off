@@ -1,74 +1,466 @@
-import os
-import pytest
-import datetime
-import time
-import subprocess
-
-class CustomizeReportRunner:
-    """
-    Runs BDD tests for each tag in the provided list, generating a separate HTML report per tag,
-    and waits a specified interval between each tag run.
-    Supports both '--html' (pytest-html) and '--html-report' (pytest-html-reporter).
-    """
-
-    def __init__(self, tags, use_html_reporter=False):
-        self.tags = tags
-        self.reports_dir = "reports/"
-        self.use_html_reporter = use_html_reporter  # If True, use --html-report
-        os.makedirs(self.reports_dir, exist_ok=True)
-
-    def run_for_tag(self, tag):
-        """Run pytest for a specific tag and generate a timestamped HTML report."""
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        html_report = os.path.join(
-            self.reports_dir,
-            f"Report_{tag}_{timestamp}.html"
-        )
-        pytest_args = [
-            "-k", tag,
-            "--maxfail=5",
-            "--disable-warnings",
-        ]
-        if self.use_html_reporter:
-            pytest_args.append(f"--html-report={html_report}")
-        else:
-            pytest_args.append(f"--html={html_report}")
-        print(f"\nRunning tests for tag: {tag}")
-        result = pytest.main(pytest_args)
-        print(f"Test run for tag '{tag}' complete. Exit code: {result}")
-        print(f"HTML report generated at: {html_report}")
-        return result
-
-    def run_all(self, interval_seconds=5):
-        """Run tests for all tags, waiting interval_seconds between each."""
-        for idx, tag in enumerate(self.tags):
-            self.run_for_tag(tag)
-            if idx < len(self.tags) - 1:
-                print(f"Waiting {interval_seconds} seconds before running next tag...")
-                time.sleep(interval_seconds)
-
-def generate_custom_html_report():
-    """
-    Calls the custom HTML report generator script after all test runs.
-    Assumes the script is at reporting/custom_html_report.py (adjust as needed).
-    """
-    script_path = os.path.join("reports", "custom_html_report.py")
-    if not os.path.exists(script_path):
-        print(f"Custom report script not found at {script_path}. Skipping report generation.")
-        return
-    print("\nGenerating modern dashboard HTML report...")
-    result = subprocess.run(["python", script_path])
-    if result.returncode == 0:
-        print("Custom HTML report generated successfully.")
-    else:
-        print("Custom HTML report generation failed.")
-
-if __name__ == "__main__":
-    tags_to_run = ["regression", "pgpencryption", "upload"]
-    #tags_to_run = ["upload"] "regression", "pgpencryption",
-    # Use True for --html-report, False for --html
-    runner = CustomizeReportRunner(tags_to_run, use_html_reporter=False)
-    runner.run_all(interval_seconds=5)
-
-    # After all test runs, generate the custom HTML report
-    generate_custom_html_report()
+16:18:07  + python ./runners/CustomizeReportRunner.py
+16:18:13  
+16:18:13  Running tests for tag: regression
+16:18:13  ============================= test session starts ==============================
+16:18:13  platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.6.0
+16:18:13  rootdir: /home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation
+16:18:13  plugins: metadata-3.1.1, html-4.1.1, bdd-8.1.0
+16:18:13  collected 1 item / 5 errors
+16:18:13  
+16:18:13  ==================================== ERRORS ====================================
+16:18:13  __________ ERROR collecting steps/test_CoBorrowerData_prepare_csv.py ___________
+16:18:13  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:13      mod = import_path(
+16:18:13  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:13      importlib.import_module(module_name)
+16:18:13  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:13      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:13             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:13  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:13      ???
+16:18:13  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:13      exec(co, module.__dict__)
+16:18:13  steps/test_CoBorrowerData_prepare_csv.py:3: in <module>
+16:18:13      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:13  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:13  E       def __init__(self):
+16:18:13  E                          ^
+16:18:13  E   IndentationError: unindent does not match any outer indentation level
+16:18:13  __________ ERROR collecting steps/test_PaymentData_currentDate_csv.py __________
+16:18:13  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:13      mod = import_path(
+16:18:13  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:13      importlib.import_module(module_name)
+16:18:13  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:13      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:13             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:13  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:13      ???
+16:18:13  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:13      exec(co, module.__dict__)
+16:18:13  steps/test_PaymentData_currentDate_csv.py:4: in <module>
+16:18:13      from utils.fixtures import paymentdata_page
+16:18:13  utils/fixtures.py:4: in <module>
+16:18:13      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:13  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:13  E       def __init__(self):
+16:18:13  E                          ^
+16:18:13  E   IndentationError: unindent does not match any outer indentation level
+16:18:13  ______________ ERROR collecting steps/test_customer_csv_steps.py _______________
+16:18:13  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:13      mod = import_path(
+16:18:13  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:13      importlib.import_module(module_name)
+16:18:13  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:13      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:13             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:13  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:13      ???
+16:18:13  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:13      exec(co, module.__dict__)
+16:18:13  steps/test_customer_csv_steps.py:5: in <module>
+16:18:13      from utils.fixtures import customer_page
+16:18:13  utils/fixtures.py:4: in <module>
+16:18:13      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:13  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:13  E       def __init__(self):
+16:18:13  E                          ^
+16:18:13  E   IndentationError: unindent does not match any outer indentation level
+16:18:13  __________ ERROR collecting steps/test_loan_information_csv_steps.py ___________
+16:18:13  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:13      mod = import_path(
+16:18:13  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:13      importlib.import_module(module_name)
+16:18:13  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:13      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:13             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:13  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:13      ???
+16:18:13  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:13      exec(co, module.__dict__)
+16:18:13  steps/test_loan_information_csv_steps.py:4: in <module>
+16:18:13      from utils.fixtures import loaninformation_page
+16:18:13  utils/fixtures.py:4: in <module>
+16:18:13      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:13  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:13  E       def __init__(self):
+16:18:13  E                          ^
+16:18:13  E   IndentationError: unindent does not match any outer indentation level
+16:18:13  ____________ ERROR collecting steps/test_loan_profile_csv_steps.py _____________
+16:18:13  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:13      mod = import_path(
+16:18:13  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:13      importlib.import_module(module_name)
+16:18:13  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:13      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:13             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:13  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:13      ???
+16:18:13  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:13      ???
+16:18:13  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:13      exec(co, module.__dict__)
+16:18:13  steps/test_loan_profile_csv_steps.py:5: in <module>
+16:18:13      from utils.fixtures import loan_profile_page
+16:18:13  utils/fixtures.py:4: in <module>
+16:18:13      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:13  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:13  E       def __init__(self):
+16:18:13  E                          ^
+16:18:13  E   IndentationError: unindent does not match any outer indentation level
+16:18:13  - Generated html report: file:///home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/reports/Report_regression_2025-07-02_10-48-07.html -
+16:18:13  =========================== short test summary info ============================
+16:18:13  ERROR steps/test_CoBorrowerData_prepare_csv.py
+16:18:13  ERROR steps/test_PaymentData_currentDate_csv.py
+16:18:13  ERROR steps/test_customer_csv_steps.py
+16:18:13  ERROR steps/test_loan_information_csv_steps.py
+16:18:13  ERROR steps/test_loan_profile_csv_steps.py
+16:18:13  !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 5 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+16:18:13  ======================== 3 warnings, 5 errors in 0.53s =========================
+16:18:13  Test run for tag 'regression' complete. Exit code: 1
+16:18:13  HTML report generated at: reports/Report_regression_2025-07-02_10-48-07.html
+16:18:13  Waiting 5 seconds before running next tag...
+16:18:13  
+16:18:13  Running tests for tag: pgpencryption
+16:18:13  ============================= test session starts ==============================
+16:18:13  platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.6.0
+16:18:19  rootdir: /home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation
+16:18:19  plugins: metadata-3.1.1, html-4.1.1, bdd-8.1.0
+16:18:19  collected 1 item / 5 errors
+16:18:19  
+16:18:19  ==================================== ERRORS ====================================
+16:18:19  __________ ERROR collecting steps/test_CoBorrowerData_prepare_csv.py ___________
+16:18:19  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:19      mod = import_path(
+16:18:19  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:19      importlib.import_module(module_name)
+16:18:19  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:19      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:19             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:19  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:19      ???
+16:18:19  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:19      exec(co, module.__dict__)
+16:18:19  steps/test_CoBorrowerData_prepare_csv.py:3: in <module>
+16:18:19      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:19  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:19  E       def __init__(self):
+16:18:19  E                          ^
+16:18:19  E   IndentationError: unindent does not match any outer indentation level
+16:18:19  __________ ERROR collecting steps/test_PaymentData_currentDate_csv.py __________
+16:18:19  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:19      mod = import_path(
+16:18:19  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:19      importlib.import_module(module_name)
+16:18:19  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:19      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:19             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:19  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:19      ???
+16:18:19  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:19      exec(co, module.__dict__)
+16:18:19  steps/test_PaymentData_currentDate_csv.py:4: in <module>
+16:18:19      from utils.fixtures import paymentdata_page
+16:18:19  utils/fixtures.py:4: in <module>
+16:18:19      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:19  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:19  E       def __init__(self):
+16:18:19  E                          ^
+16:18:19  E   IndentationError: unindent does not match any outer indentation level
+16:18:19  ______________ ERROR collecting steps/test_customer_csv_steps.py _______________
+16:18:19  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:19      mod = import_path(
+16:18:19  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:19      importlib.import_module(module_name)
+16:18:19  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:19      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:19             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:19  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:19      ???
+16:18:19  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:19      exec(co, module.__dict__)
+16:18:19  steps/test_customer_csv_steps.py:5: in <module>
+16:18:19      from utils.fixtures import customer_page
+16:18:19  utils/fixtures.py:4: in <module>
+16:18:19      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:19  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:19  E       def __init__(self):
+16:18:19  E                          ^
+16:18:19  E   IndentationError: unindent does not match any outer indentation level
+16:18:19  __________ ERROR collecting steps/test_loan_information_csv_steps.py ___________
+16:18:19  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:19      mod = import_path(
+16:18:19  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:19      importlib.import_module(module_name)
+16:18:19  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:19      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:19             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:19  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:19      ???
+16:18:19  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:19      exec(co, module.__dict__)
+16:18:19  steps/test_loan_information_csv_steps.py:4: in <module>
+16:18:19      from utils.fixtures import loaninformation_page
+16:18:19  utils/fixtures.py:4: in <module>
+16:18:19      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:19  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:19  E       def __init__(self):
+16:18:19  E                          ^
+16:18:19  E   IndentationError: unindent does not match any outer indentation level
+16:18:19  ____________ ERROR collecting steps/test_loan_profile_csv_steps.py _____________
+16:18:19  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:19      mod = import_path(
+16:18:19  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:19      importlib.import_module(module_name)
+16:18:19  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:19      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:19             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:19  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:19      ???
+16:18:19  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:19      exec(co, module.__dict__)
+16:18:19  steps/test_loan_profile_csv_steps.py:5: in <module>
+16:18:19      from utils.fixtures import loan_profile_page
+16:18:19  utils/fixtures.py:4: in <module>
+16:18:19      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:19  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:19  E       def __init__(self):
+16:18:19  E                          ^
+16:18:19  E   IndentationError: unindent does not match any outer indentation level
+16:18:19  - Generated html report: file:///home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/reports/Report_pgpencryption_2025-07-02_10-48-13.html -
+16:18:19  =========================== short test summary info ============================
+16:18:19  ERROR steps/test_CoBorrowerData_prepare_csv.py
+16:18:19  ERROR steps/test_PaymentData_currentDate_csv.py
+16:18:19  ERROR steps/test_customer_csv_steps.py
+16:18:19  ERROR steps/test_loan_information_csv_steps.py
+16:18:19  ERROR steps/test_loan_profile_csv_steps.py
+16:18:19  !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 5 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+16:18:19  ============================== 5 errors in 0.40s ===============================
+16:18:19  Test run for tag 'pgpencryption' complete. Exit code: 1
+16:18:19  HTML report generated at: reports/Report_pgpencryption_2025-07-02_10-48-13.html
+16:18:19  Waiting 5 seconds before running next tag...
+16:18:19  
+16:18:19  Running tests for tag: upload
+16:18:19  ============================= test session starts ==============================
+16:18:19  platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.6.0
+16:18:19  rootdir: /home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation
+16:18:19    File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/reports/custom_html_report.py", line 234
+16:18:19      report_dir = os.path.join(os.environ.get("WORKSPACE", "."), "reports")"
+16:18:19                                                                            ^
+16:18:19  SyntaxError: unterminated string literal (detected at line 234)
+16:18:19  plugins: metadata-3.1.1, html-4.1.1, bdd-8.1.0
+16:18:19  collected 1 item / 5 errors
+16:18:19  
+16:18:19  ==================================== ERRORS ====================================
+16:18:19  __________ ERROR collecting steps/test_CoBorrowerData_prepare_csv.py ___________
+16:18:19  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:19      mod = import_path(
+16:18:19  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:19      importlib.import_module(module_name)
+16:18:19  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:19      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:19             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:19  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:19      ???
+16:18:19  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:19      exec(co, module.__dict__)
+16:18:19  steps/test_CoBorrowerData_prepare_csv.py:3: in <module>
+16:18:19      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:19  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:19  E       def __init__(self):
+16:18:19  E                          ^
+16:18:19  E   IndentationError: unindent does not match any outer indentation level
+16:18:19  __________ ERROR collecting steps/test_PaymentData_currentDate_csv.py __________
+16:18:19  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:19      mod = import_path(
+16:18:19  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:19      importlib.import_module(module_name)
+16:18:19  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:19      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:19             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:19  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:19      ???
+16:18:19  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:19      exec(co, module.__dict__)
+16:18:19  steps/test_PaymentData_currentDate_csv.py:4: in <module>
+16:18:19      from utils.fixtures import paymentdata_page
+16:18:19  utils/fixtures.py:4: in <module>
+16:18:19      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:19  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:19  E       def __init__(self):
+16:18:19  E                          ^
+16:18:19  E   IndentationError: unindent does not match any outer indentation level
+16:18:19  ______________ ERROR collecting steps/test_customer_csv_steps.py _______________
+16:18:19  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:19      mod = import_path(
+16:18:19  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:19      importlib.import_module(module_name)
+16:18:19  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:19      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:19             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:19  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:19      ???
+16:18:19  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:19      exec(co, module.__dict__)
+16:18:19  steps/test_customer_csv_steps.py:5: in <module>
+16:18:19      from utils.fixtures import customer_page
+16:18:19  utils/fixtures.py:4: in <module>
+16:18:19      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:19  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:19  E       def __init__(self):
+16:18:19  E                          ^
+16:18:19  E   IndentationError: unindent does not match any outer indentation level
+16:18:19  __________ ERROR collecting steps/test_loan_information_csv_steps.py ___________
+16:18:19  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:19      mod = import_path(
+16:18:19  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:19      importlib.import_module(module_name)
+16:18:19  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:19      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:19             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:19  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:19      ???
+16:18:19  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:19      exec(co, module.__dict__)
+16:18:19  steps/test_loan_information_csv_steps.py:4: in <module>
+16:18:19      from utils.fixtures import loaninformation_page
+16:18:19  utils/fixtures.py:4: in <module>
+16:18:19      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:19  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:19  E       def __init__(self):
+16:18:19  E                          ^
+16:18:19  E   IndentationError: unindent does not match any outer indentation level
+16:18:19  ____________ ERROR collecting steps/test_loan_profile_csv_steps.py _____________
+16:18:19  venv/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
+16:18:19      mod = import_path(
+16:18:19  venv/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
+16:18:19      importlib.import_module(module_name)
+16:18:19  /usr/lib/python3.12/importlib/__init__.py:90: in import_module
+16:18:19      return _bootstrap._gcd_import(name[level:], package, level)
+16:18:19             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16:18:19  <frozen importlib._bootstrap>:1387: in _gcd_import
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1360: in _find_and_load
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
+16:18:19      ???
+16:18:19  <frozen importlib._bootstrap>:935: in _load_unlocked
+16:18:19      ???
+16:18:19  venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+16:18:19      exec(co, module.__dict__)
+16:18:19  steps/test_loan_profile_csv_steps.py:5: in <module>
+16:18:19      from utils.fixtures import loan_profile_page
+16:18:19  utils/fixtures.py:4: in <module>
+16:18:19      from pages.coborrowerdata_page import CoBorrowerDataPage
+16:18:19  E     File "/home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/pages/coborrowerdata_page.py", line 8
+16:18:19  E       def __init__(self):
+16:18:19  E                          ^
+16:18:19  E   IndentationError: unindent does not match any outer indentation level
+16:18:19  - Generated html report: file:///home/ubuntu/workspace/BU/Digital/Paymentor/paymentor-automation/paymentor-ETL-automation/bu-digital-paymentor-qa-automation/reports/Report_upload_2025-07-02_10-48-18.html -
+16:18:19  =========================== short test summary info ============================
+16:18:19  ERROR steps/test_CoBorrowerData_prepare_csv.py
+16:18:19  ERROR steps/test_PaymentData_currentDate_csv.py
+16:18:19  ERROR steps/test_customer_csv_steps.py
+16:18:19  ERROR steps/test_loan_information_csv_steps.py
+16:18:19  ERROR steps/test_loan_profile_csv_steps.py
+16:18:19  !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 5 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+16:18:19  ============================== 5 errors in 0.39s ===============================
+16:18:19  Test run for tag 'upload' complete. Exit code: 1
+16:18:19  HTML report generated at: reports/Report_upload_2025-07-02_10-48-18.html
+16:18:19  
+16:18:19  Generating modern dashboard HTML report...
+16:18:19  Custom HTML report generation failed.
+16:18:19  + echo Script finished with exit code 0
+16:18:19  Script finished with exit code 0
+16:18:20  [Pipeline] }
+16:18:20  [Pipeline] // withEnv
+16:18:20  [Pipeline] }
+16:18:20  [Pipeline] // script
+16:18:20  [Pipeline] }
+16:18:20  [Pipeline] // dir
+16:18:20  [Pipeline] }
+16:18:20  
+16:18:20  [Pipeline] // ansiColor
+16:18:20  [Pipeline] }
