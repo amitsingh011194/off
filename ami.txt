@@ -1,16 +1,74 @@
+import os
+import pytest
+import datetime
+import time
+import subprocess
 
+class CustomizeReportRunner:
+    """
+    Runs BDD tests for each tag in the provided list, generating a separate HTML report per tag,
+    and waits a specified interval between each tag run.
+    Supports both '--html' (pytest-html) and '--html-report' (pytest-html-reporter).
+    """
 
- events:
-      - s3:
-          # The S3 bucket name is dynamically loaded from SSM Parameter Store
-          bucket: ${ssm:/CUSTOMER/BITBUCKET_REPO_SLUG/TARGET_ENVIRONMENT/SSP_API_S3_BUCKET_SSP_FILES}
-          # This triggers the Lambda for all object creation events (Put, Post, Copy, MultipartUpload)
-          event: s3:ObjectCreated:*
-          # Set to 'true' because your bucket likely already exists and is managed outside Serverless
-          existing: true
-          # Only trigger for objects created in the specified folder path
-          rules:
-            - prefix: nf-tops-dev-s3-dps/clients/moneyjet/achreturns/
+    def __init__(self, tags, use_html_reporter=False):
+        self.tags = tags
+        self.reports_dir = "reports/"
+        self.use_html_reporter = use_html_reporter  # If True, use --html-report
+        os.makedirs(self.reports_dir, exist_ok=True)
 
+    def run_for_tag(self, tag):
+        """Run pytest for a specific tag and generate a timestamped HTML report."""
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        html_report = os.path.join(
+            self.reports_dir,
+            f"Report_{tag}_{timestamp}.html"
+        )
+        pytest_args = [
+            "-k", tag,
+            "--maxfail=5",
+            "--disable-warnings",
+        ]
+        if self.use_html_reporter:
+            pytest_args.append(f"--html-report={html_report}")
+        else:
+            pytest_args.append(f"--html={html_report}")
+        print(f"\nRunning tests for tag: {tag}")
+        result = pytest.main(pytest_args)
+        print(f"Test run for tag '{tag}' complete. Exit code: {result}")
+        print(f"HTML report generated at: {html_report}")
+        return result
 
+    def run_all(self, interval_seconds=5):
+        """Run tests for all tags, waiting interval_seconds between each."""
+        for idx, tag in enumerate(self.tags):
+            self.run_for_tag(tag)
+            if idx < len(self.tags) - 1:
+                print(f"Waiting {interval_seconds} seconds before running next tag...")
+                time.sleep(interval_seconds)
 
+def generate_custom_html_report():
+    """
+    Calls the custom HTML report generator script after all test runs.
+    Assumes the script is at reporting/custom_html_report.py (adjust as needed).
+    """
+    script_path = os.path.join("reports", "custom_html_report.py")
+    if not os.path.exists(script_path):
+        print(f"Custom report script not found at {script_path}. Skipping report generation.")
+        return
+    print("\nGenerating modern dashboard HTML report...")
+    result = subprocess.run(["python", script_path])
+    if result.returncode == 0:
+        print("Custom HTML report generated successfully.")
+    else:
+        print("Custom HTML report generation failed.")
+
+if __name__ == "__main__":
+    tags_to_run = ["regression", "pgpencryption", "upload"]
+    #tags_to_run = ["upload"] "regression", "pgpencryption",
+    # Use True for --html-report, False for --html
+    runner = CustomizeReportRunner(tags_to_run, use_html_reporter=False)
+    runner.run_all(interval_seconds=5)
+
+    # After all test runs, generate the custom HTML report
+    generate_custom_html_report()
