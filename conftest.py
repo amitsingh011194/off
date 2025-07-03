@@ -1,3 +1,25 @@
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+
+@pytest.fixture
+def driver():
+    """Provide a Selenium WebDriver instance using Chrome."""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")  # Comment this line if you want to see the browser
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,1080")
+
+    service = ChromeService(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    driver.maximize_window()
+    yield driver
+    driver.quit()
+
+
+
+==========
 import pytest
 import uuid
 import os
