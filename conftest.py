@@ -1,222 +1,223 @@
-from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-
-@pytest.fixture
-def driver():
-    """Provide a Selenium WebDriver instance using Chrome."""
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Comment this line if you want to see the browser
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080")
-
-    service = ChromeService(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    driver.maximize_window()
-    yield driver
-    driver.quit()
-
-
-
-==========
-import pytest
-import uuid
-import os
-import configparser
-import boto3
-import yaml
+import pymysql
+import pymysql.cursors
+import requests
 from datetime import datetime
-from selenium import webdriver
+import json
+import sys
+from boto3 import client, resource
 
-@pytest.fixture(scope="session")
-def config():
-    """Load test configuration from subconfig.yaml."""
-    with open("subconfig.yaml") as f:
-        return yaml.safe_load(f)
+# Importing Functions
 
-# Add the missing 'url' fixture
-@pytest.fixture
-def url(config):
-    """Provide base URL from configuration"""
-    return config["base_url"]  # Ensure subconfig.yaml has 'base_url' defined
+from helper_functions import logger, get_parameter_from_ssm, get_client_name
 
-@pytest.fixture(scope="function")
-def dynamic_aws_profile(config):
-    """
-    Dynamically create an AWS profile using hardcoded credentials.
-    Cleans up the profile after the test.
-    """
+TodayDate = datetime.today().date()
 
+def lambda_handler(event, context):
 
-    # Write credentials to ~/.aws/credentials
-    cred_path = os.path.expanduser("~/.aws/credentials")
-    creds = configparser.ConfigParser()
-    if os.path.exists(cred_path):
-        creds.read(cred_path)
-    creds[profile_name] = {
-        "aws_access_key_id": access_key,
-        "aws_secret_access_key": secret_key,
-        "aws_session_token": session_token,
-    }
-    with open(cred_path, "w") as f:
-        creds.write(f)
+	logger.info(f"Event: {json.dumps(event)}")
+	logger.info("started Report lambda")
 
-    # Write region to ~/.aws/config
-    conf_path = os.path.expanduser("~/.aws/config")
-    config_file = configparser.ConfigParser()
-    if os.path.exists(conf_path):
-        config_file.read(conf_path)
-    config_file[f"profile {profile_name}"] = {"region": region}
-    with open(conf_path, "w") as f:
-        config_file.write(f)
+	global connection, bank, cursor, ssm
 
-    yield profile_name
+	# Getting event variables
+	bank = get_client_name(event['bank_code'])
+	bank_code = event['bank_code']
+	run_no = event['run_no']
+	zone = event['zone']
 
-    # Cleanup: Remove the profile after the test
-    creds.read(cred_path)
-    if profile_name in creds:
-        creds.remove_section(profile_name)
-        with open(cred_path, "w") as f:
-            creds.write(f)
-    config_file.read(conf_path)
-    section = f"profile {profile_name}"
-    if section in config_file:
-        config_file.remove_section(section)
-        with open(conf_path, "w") as f:
-            config_file.write(f)
+	ssm = client("ssm")
+	cp = client('customer-profiles')
 
-@pytest.fixture
-def aws_session(dynamic_aws_profile):
-    """Return a boto3.Session using the dynamic AWS profile."""
-    return boto3.Session(profile_name=dynamic_aws_profile)
+	# Getting Database Details from SSM
+	dbname = get_parameter_from_ssm(ssm, "SSP_DB_NAME", bank)
+	user = get_parameter_from_ssm(ssm, "SSP_DB_USER", bank)
+	password = get_parameter_from_ssm(ssm, "SSP_DB_PASSWORD", bank)
+	host = get_parameter_from_ssm(ssm, "SSP_DB_HOST", bank)
+	port = get_parameter_from_ssm(ssm, "SSP_DB_PORT", bank)
 
-@pytest.fixture
-def today_str():
-    """Returns today's date as YYYY-MM-DD string."""
-    return datetime.now().strftime("%Y-%m-%d")
-
-# ------------------- ADD THIS FOR SELENIUM WEBDRIVER -------------------
-
-@pytest.fixture
-def driver():
-    """Provide a Selenium WebDriver instance."""
-    driver = webdriver.Firefox()
-    driver.maximize_window()
-    yield driver
-    driver.quit()  # Uncommented to ensure cleanup
-
-@pytest.fixture
-def main_page(driver):
-    return MainPage(driver)
+	# Getting other Details from SSM
+	domain = get_parameter_from_ssm(ssm, "CONNECT_DOMAIN", bank)
+	lm_url = get_parameter_from_ssm(ssm, "CONDUENT_LINK", bank)
 
 
-====================================================================
+	try:
+		# Connect to the database
+		connection = pymysql.connect(
+			host=host,
+			user=user,
+			password=password,
+			database=dbname,
+			port=int(port),
+			sql_mode="",
+		)
+
+		logger.info(f"Connection to Database Successful: {connection}")
+
+	except pymysql.MySQLError as e:
+		logger.error(f"Error during connecting to database: {e}")
+		return e
+	
+
+	logger.info("Starting the lambda for previous customer profile deletion")
+	if connection:
+		try:
+			if run_no == "1":
+				query = f"select * from customer_profile"
+			else:
+				query = f"select * from customer_profile where zone_code = '{zone}'"
+			cursor = connection.cursor(pymysql.cursors.DictCursor)
+			cursor.execute(query)
+			result = cursor.fetchall()
+			logger.info(f"Query Fetched Successfully. Query for deleting zone {zone} is {query}. Length: {len(result)}")
+
+			for row in result:
+				id = row['id']
+				shawkey = row['shawkey']
+				zone_code = row['zone_code']
+				first_name = row['first_name']
+				last_name = row['last_name']
+				address = row['address']
+				city = row['city']
+				state = row['state']
+				zip_code = row['zip_code']
+				phone_number = row['phone_number']
+				date_of_birth = f"{row['date_of_birth']}"
+				email = row['email']
+				ssn = row['ssn']
+				run1 = row['run1']
+				run2 = row['run2']
+				run3 = row['run3']
+				created_at = row['created_at']
+				updated_at = row['updated_at']
+				profile_id = row['profile_id']
+				dataloadingdate = row['dataloadingdate']
+
+				try:
+					response = cp.delete_profile(
+								DomainName=domain,
+								ProfileId=profile_id)
+					
+					logger.info(f"Resposne for deleting {profile_id} is {response}")
+				except Exception as e:
+					logger.error(f"Error during trying to remove the profile {profile_id} from customer profiles in connect. Error: {e}")
+					response = {"Message":"NOTOK"}
+
+				if response.get('Message') == "OK":
+					logger.info(f"successfully deleted the profile {profile_id} for shawkey: {shawkey}")
+				else:
+					logger.error(f"Error during deleting the profile {profile_id}. Error: {response.get('Message')}")
+				
+				try:
+					delete_query = f"DELETE FROM customer_profile WHERE id = {id}"
+					cursor.execute(delete_query)
+					connection.commit()
+				except Exception as e:
+					logger.error(f"Error during deleting record {profile_id} from database for id {id}.")
+		except pymysql.MySQLError as e:
+			logger.error(f"Error executing query for all records of customer profiles for deletion task. Error: {e}")
+			return e
+	else:
+		logger.error("Connection lost during deletion task")
+		
+	if run_no == "1":
+		query = f"select * from customer_profile_history where run1 = '1' and dataloadingdate = '{TodayDate}'"
+	elif run_no == "2":
+		query = f"select * from customer_profile_history where run2 = '1' and dataloadingdate = '{TodayDate}' and zone_code = '{zone}'"
+	elif run_no == "3":
+		query = f"select * from customer_profile_history where run3 = '1' and dataloadingdate = '{TodayDate}' and zone_code = '{zone}'"
+	else:
+		logger.error("run_no is not correct.")
+		return {"res": "failed"}
+
+	logger.info(f"Query for run {run_no} for zone {zone}: {query}")
+	if connection:
+		try:
+			cursor = connection.cursor(pymysql.cursors.DictCursor)
+			cursor.execute(query)
+			result = cursor.fetchall()
+			logger.info(f"Query Fetched Successfully. Query: {query}. Length: {len(result)}.")
+
+			for row in result:
+				id = row['id']
+				shawkey = row['shawkey']
+				zone_code = row['zone_code']
+				first_name = row['first_name']
+				last_name = row['last_name']
+				address = row['address']
+				city = row['city']
+				state = row['state']
+				zip_code = row['zip_code']
+				phone_number = row['phone_number']
+				date_of_birth = str(row['date_of_birth'])
+				email = row['email']
+				ssn = row['ssn']
+				run1 = row['run1']
+				run2 = row['run2']
+				run3 = row['run3']
+				created_at = row['created_at']
+				updated_at = row['updated_at']
+				profile_id = row['profile_id']
+				dataloadingdate = row['dataloadingdate']
+				multiple_loan_flag = row['multiple_loan_flag']
+				conduent = lm_url+shawkey
+
+				response = cp.create_profile(
+					DomainName=domain,
+					AccountNumber=shawkey,
+					FirstName=first_name,
+					LastName=last_name,
+					BirthDate=date_of_birth,
+					PhoneNumber=phone_number,
+					MobilePhoneNumber=phone_number,
+					EmailAddress=email,
+					Address={
+						'Address1': address,
+						'City': city,
+						'State': state,
+						'Country': 'US',
+						'PostalCode': zip_code
+					},
+					Attributes={
+						'SSN': ssn,
+						'Link': conduent,
+						'Zone': zone_code,
+						'Run': run_no,
+						'MultipleLoan': multiple_loan_flag
+					})
+
+				logger.info(f"response for {shawkey} is {response}")
+
+				new_profile_id = response.get('ProfileId')
+
+				if new_profile_id:
+					# Update the profile_id with data in the database
+					try:
+						sql_query = '''INSERT INTO customer_profile (
+															shawkey, zone_code, first_name, last_name, 
+															address, city, state, zip_code, phone_number, 
+															date_of_birth, email, ssn, profile_id,dataloadingdate,multiple_loan_flag) 
+												VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'''
+
+						cursor.execute(sql_query, (
+							row['shawkey'], row['zone_code'], row['first_name'], row['last_name'],
+							row['address'], row['city'], row['state'], row['zip_code'], row['phone_number'],
+							row['date_of_birth'], row['email'], row['ssn'], new_profile_id, row['dataloadingdate'],multiple_loan_flag
+						))
+
+						connection.commit()
+						logger.info(f"Successfully entered data in customer_profile for {shawkey} with profile ID {new_profile_id}")
+					except Exception as e:
+						logger.error(f"An error occurred while inserting the data into customer_profile for {shawkey}: {e}")
 
 
-this is my conftest.py:
+					logger.info(f"Profile created successfully. Profile ID: {new_profile_id} for Customer ID: {shawkey}")
+				else:
+					logger.error(f"Profile creation failed for Customer ID: {shawkey}, no Profile ID returned in response.")
+		except pymysql.MySQLError as e:
+			logger.error(f"Error executing query. Error: {e}")
+			return e
+	else:
+		logger.error("Connection lost during fetching from history table task")
 
-import pytest
-import uuid
-import os
-import configparser
-import boto3
-import yaml
-from datetime import datetime
-from selenium import webdriver
-
-@pytest.fixture(scope="session")
-def config():
-    """Load test configuration from subconfig.yaml."""
-    with open("subconfig.yaml") as f:
-        return yaml.safe_load(f)
-
-# Add the missing 'url' fixture
-@pytest.fixture
-def url(config):
-    """Provide base URL from configuration"""
-    return config["base_url"]  # Ensure subconfig.yaml has 'base_url' defined
-
-@pytest.fixture(scope="function")
-def dynamic_aws_profile(config):
-    """
-    Dynamically create an AWS profile using hardcoded credentials.
-    Cleans up the profile after the test.
-    """
-    # HARDCODED AWS CREDENTIALS - FOR DEMO/LOCAL USE ONLY!
-    access_key = ""
-    secret_key = ""
-    region = config.get("region", "us-east-1")
-    profile_name = f"qa-profile-{uuid.uuid4().hex[:8]}"
-
-    # Write credentials to ~/.aws/credentials
-    cred_path = os.path.expanduser("~/.aws/credentials")
-    creds = configparser.ConfigParser()
-    if os.path.exists(cred_path):
-        creds.read(cred_path)
-    creds[profile_name] = {
-        "aws_access_key_id": access_key,
-        "aws_secret_access_key": secret_key,
-        "aws_session_token": session_token,
-    }
-    with open(cred_path, "w") as f:
-        creds.write(f)
-
-    # Write region to ~/.aws/config
-    conf_path = os.path.expanduser("~/.aws/config")
-    config_file = configparser.ConfigParser()
-    if os.path.exists(conf_path):
-        config_file.read(conf_path)
-    config_file[f"profile {profile_name}"] = {"region": region}
-    with open(conf_path, "w") as f:
-        config_file.write(f)
-
-    yield profile_name
-
-    # Cleanup: Remove the profile after the test
-    creds.read(cred_path)
-    if profile_name in creds:
-        creds.remove_section(profile_name)
-        with open(cred_path, "w") as f:
-            creds.write(f)
-    config_file.read(conf_path)
-    section = f"profile {profile_name}"
-    if section in config_file:
-        config_file.remove_section(section)
-        with open(conf_path, "w") as f:
-            config_file.write(f)
-
-@pytest.fixture
-def aws_session(dynamic_aws_profile):
-    """Return a boto3.Session using the dynamic AWS profile."""
-    return boto3.Session(profile_name=dynamic_aws_profile)
-
-@pytest.fixture
-def today_str():
-    """Returns today's date as YYYY-MM-DD string."""
-    return datetime.now().strftime("%Y-%m-%d")
-
-# ------------------- ADD THIS FOR SELENIUM WEBDRIVER -------------------
-
-from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-
-@pytest.fixture
-def driver():
-    """Provide a Selenium WebDriver instance using Chrome."""
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Use GUI browser in local by commenting this line
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080")
-
-    service = ChromeService(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    yield driver
-    driver.quit()
-
-
-@pytest.fixture
-def main_page(driver):
-    return MainPage(driver)
+	logger.info("Lambda Ended.")
+	return {"res":"success"}
