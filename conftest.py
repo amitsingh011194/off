@@ -59,3 +59,15 @@ class PageEncrypt:
         return missing
 
 
+and as you see, the config is coming from config.yaml which contains this:
+
+pgp_public_key: "${WORKSPACE}/bu-digital-paymentor-qa-automation/utils/file-public.pgp"
+csv_data_dir: "${WORKSPACE}/bu-digital-paymentor-qa-automation/data"
+encryption_dir: "${WORKSPACE}/bu-digital-paymentor-qa-automation/encryption"
+cloudwatch:
+  log_groups:
+  gatekeeper: "/aws/lambda/sb-utp1-1674e330-etl_gatekeeper"
+  primary: "/aws/lambda/sb-utp1-1674e330-etl_primary"
+  primary_batch_sender: "/aws/lambda/sb-utp1-1674e330-etl_primary_batch_sender"
+
+
