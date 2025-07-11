@@ -1,7 +1,17 @@
+config.yaml
+
+pgp_public_key: "${WORKSPACE}/bu-digital-paymentor-qa-automation/utils/file-public.pgp"
+csv_data_dir: "${WORKSPACE}/bu-digital-paymentor-qa-automation/data"
+encryption_dir: "${WORKSPACE}/bu-digital-paymentor-qa-automation/encryption"
+cloudwatch:
+  log_groups:
+  gatekeeper: "/aws/lambda/sb-utp1-1674e330-etl_gatekeeper"
+  primary: "/aws/lambda/sb-utp1-1674e330-etl_primary"
+  primary_batch_sender: "/aws/lambda/sb-utp1-1674e330-etl_primary_batch_sender"
+
+
+
 pages/test_encrypt.py
-
-
-here we have this:
 
 import os
 import glob
@@ -17,11 +27,19 @@ class PageEncrypt:
         
     @classmethod
     def load_config(cls):
-        # Assumes this file is in pages/, config.yaml is two levels up
         workspace_root = os.environ.get('WORKSPACE', os.getcwd())
         config_path = os.path.join(workspace_root, 'bu-digital-paymentor-qa-automation', 'config.yaml')
         with open(config_path) as f:
-            return yaml.safe_load(f)
+            raw_config = yaml.safe_load(f)
+
+    # Expand env vars like ${WORKSPACE} in all values
+        resolved_config = {
+            key: os.path.expandvars(value) if isinstance(value, str) else value
+            for key, value in raw_config.items()
+        }
+
+        return resolved_config
+
 
     def public_key_exists(self):
         return os.path.isfile(self.key_file)
@@ -59,15 +77,45 @@ class PageEncrypt:
         return missing
 
 
-and as you see, the config is coming from config.yaml which contains this:
+steps/test_encrypt_steps.py
 
-pgp_public_key: "${WORKSPACE}/bu-digital-paymentor-qa-automation/utils/file-public.pgp"
-csv_data_dir: "${WORKSPACE}/bu-digital-paymentor-qa-automation/data"
-encryption_dir: "${WORKSPACE}/bu-digital-paymentor-qa-automation/encryption"
-cloudwatch:
-  log_groups:
-  gatekeeper: "/aws/lambda/sb-utp1-1674e330-etl_gatekeeper"
-  primary: "/aws/lambda/sb-utp1-1674e330-etl_primary"
-  primary_batch_sender: "/aws/lambda/sb-utp1-1674e330-etl_primary_batch_sender"
+import pytest
+from pytest_bdd import scenarios, given, when, then
+from pages.test_encrypt import PageEncrypt
+
+
+# Load all scenarios from the feature file
+scenarios('../features/encrypt_csv.feature')
+
+@pytest.fixture(scope="session")
+def config():
+    return PageEncrypt.load_config()
+
+@pytest.fixture
+def context(config):
+    # Provide a fresh PageEncrypt instance for each test
+    return {
+        'page': PageEncrypt(config),
+        'encrypted_files': []
+    }
+
+@given("the public PGP key file exists")
+def public_pgp_key_exists(context):
+    #assert context['page'].public_key_exists(), \
+        f"Public key file {context['page'].key_file} does not exist."
+    
+@when("I encrypt all the CSV files using the public key")
+def encrypt_csv_files(context):
+    context['encrypted_files'] = context['page'].encrypt_all_csvs()
+
+@then('encrypted files should be created in the encryption directory with ".gpg" extension')
+def encrypted_files_created(context):
+    missing = context['page'].verify_encrypted_files(context['encrypted_files'])
+    assert not missing, f"Missing encrypted files: {', '.join(missing)}"
+
+
+so this is the whole thing chatgpt, as you see, we have config.yaml where this is defined: pgp_public_key: "${WORKSPACE}/bu-digital-paymentor-qa-automation/utils/file-public.pgp"
+then , this is being called in test_encrypt.py and then test_encrypt.py is called in test_encrypt_steps.py
+
 
 
