@@ -1,3 +1,5 @@
+you gave me these suggestions. based on that, this is my final code:
+
 import boto3
 import psycopg2
 import os
@@ -51,6 +53,7 @@ def lambda_handler(event, context):
             database=DB_NAME,
             user=DB_USER,
             password=DB_PASSWORD
+            connect_timeout=10  # Timeout in seconds)
         )
         cursor = conn.cursor()
  
@@ -80,7 +83,7 @@ def lambda_handler(event, context):
             "communicationdecisions_dup": f"SELECT * FROM paymentor.pii.communicationdecisions WHERE createdatetime >= '{today}';",
             "communicationdecisionshistory": f"SELECT * FROM paymentor.communicationdecisionshistory WHERE createdatetime >= '{today}';",
             "chatshistory": "SELECT * FROM paymentor.chatshistory;",
-            "communicationsent": f"SELECT * FROM paymentor.communicationssent WHERE date(createdatetime) = '{today}' ORDER BY accountnumber;",
+            "communicationsent_by_accountnumber": f"SELECT * FROM paymentor.communicationssent WHERE date(createdatetime) = '{today}' ORDER BY accountnumber;",
             "communicationssent": f"SELECT * FROM paymentor.communicationssent WHERE date(createdatetime) = '{today}' ORDER BY createdatetime desc;",
             "smsevents": f"SELECT * FROM paymentor.smsevents ORDER by createdatetime desc;",
             "smsclicks": f"SELECT * FROM paymentor.smsclicks WHERE date(createdatetime) = '{today}' ORDER BY createdatetime desc;",
@@ -89,7 +92,7 @@ def lambda_handler(event, context):
         }
 
         # Create logs directory in /tmp
-        logs_dir = "/src/main/logs"
+        logs_dir = "/tmp/logs"
         os.makedirs(logs_dir, exist_ok=True)
  
         saved_files = []
