@@ -1,5 +1,3 @@
-you gave me these suggestions. based on that, this is my final code:
-
 import boto3
 import psycopg2
 import os
@@ -52,7 +50,7 @@ def lambda_handler(event, context):
             port=DB_PORT,
             database=DB_NAME,
             user=DB_USER,
-            password=DB_PASSWORD
+            password=DB_PASSWORD,
             connect_timeout=10  # Timeout in seconds)
         )
         cursor = conn.cursor()
