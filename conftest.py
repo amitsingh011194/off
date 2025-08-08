@@ -56,11 +56,12 @@ def lambda_handler(event, context):
         cursor = conn.cursor()
  
         today = date.today().isoformat()
- 
+        #"etvalidations": f"SELECT * FROM paymentor.etlvalidations WHERE createdatetime >= '{today}';",
+                           # select * from paymentor.etlvalidations where createdatetime >= current_date;
         # Query map
         queries = {
             "opsmonitor": f"SELECT * FROM paymentor.opsmonitor;",
-            "etvalidations": f"SELECT * FROM paymentor.etvalidations WHERE createdatetime >= '{today}';",
+            "etvalidations": f"SELECT * FROM paymentor.etlvalidations WHERE createdatetime >= '{today}';",
             "ssplugin": f"SELECT * FROM paymentor.ssplugin WHERE createdatetime >= '{today}';",
             "debtshistory": f"SELECT * FROM paymentor.debtshistory WHERE createdatetime >= '{today}';",
             "paymentplanoptions": f"SELECT * FROM paymentor.paymentplanoptions;",
