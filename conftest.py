@@ -200,7 +200,7 @@ def lambda_handler(event, context):
  
         # Upload zip to S3
         s3 = boto3.client("s3")
-        s3_bucket = "paymentor-dbvalidation-uat-lambda-dbvalidation-lambda"  # <-- Replace with your actual bucket
+        s3_bucket = "sb-utp1-tenant-1674e330-tenantbucket-qzttjz75pp8k"  # <-- Replace with your actual bucket
         s3_key = f"lambda-logs/logs_{today}.zip"
  
         s3.upload_file(zip_file_path, s3_bucket, s3_key)
