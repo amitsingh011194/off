@@ -52,6 +52,7 @@ config = Config(
 )
 sqs_client = boto3.client("sqs")
 pinpoint_client = boto3.client('pinpoint', config=config)
+SNS = boto3.client('sns', config=config)
 
 
 def lambda_handler(event, context):
@@ -70,7 +71,7 @@ def lambda_handler(event, context):
             batch_msg_id = str(i)
             message_tracker_dict[batch_msg_id] = message_id
             logger.debug(body)
-            app_id = body['app_id']
+            # app_id = body['app_id']
             origination_number = body['senderphonenumber']
             keyword = body['keyword']
             to_sms = body["countrycode"].replace("+", "").replace(" ", "") + body['to_num']
@@ -78,67 +79,67 @@ def lambda_handler(event, context):
             logger.debug(f'recipient is {body["to_num"]}')
             curr_datetime = datetime.now(tz)
 
-            if USE_MPS_RATE_LIMITING:
-                message_parts = calculate_message_parts(body['message'])
-                logger.debug(f"message_parts is {message_parts}")
+            # if USE_MPS_RATE_LIMITING:
+            #     message_parts = calculate_message_parts(body['message'])
+            #     logger.debug(f"message_parts is {message_parts}")
+            #
+            #     if message_parts > INSTANCE_MPS_RATE_LIMIT:
+            #         logger.warning(f"Can't use rate limiting for this message. Message parts over instance rate limit: {message_parts} > {str(INSTANCE_MPS_RATE_LIMIT)}")
+            #     else:
+            #         if parts_sent + message_parts > INSTANCE_MPS_RATE_LIMIT:
+            #             logger.debug(f"message parts over instance rate limit: {parts_sent + message_parts} > {INSTANCE_MPS_RATE_LIMIT}")
+            #             elapsed_time = time.time() - start_time
+            #             logger.debug(f"elapsed time is {elapsed_time}")
+            #             if elapsed_time < RATE_LIMIT_WINDOW:
+            #                 wait_time = RATE_LIMIT_WINDOW - elapsed_time
+            #                 logger.debug(f"Less than rate limit ({RATE_LIMIT_WINDOW} seconds) passed: {elapsed_time}. Waiting {wait_time} seconds")
+            #                 time.sleep(wait_time)  # Wait until the next window
+            #                 # Reset start_time and parts_sent count for the new window
+            #                 start_time = time.time()
+            #                 parts_sent = 0
+            #                 logger.debug("reset parts sent count and start time")
+            #             else:
+            #                 logger.debug(f"More than rate limit ({RATE_LIMIT_WINDOW} seconds) passed: {elapsed_time}. resetting time and parts sent count")
+            #                 start_time = time.time()
+            #                 # Reset start_time and parts_sent count for the new window
+            #                 parts_sent = 0
+            #                 logger.debug("reset parts sent count and start time")
 
-                if message_parts > INSTANCE_MPS_RATE_LIMIT:
-                    logger.warning(f"Can't use rate limiting for this message. Message parts over instance rate limit: {message_parts} > {str(INSTANCE_MPS_RATE_LIMIT)}")
-                else:
-                    if parts_sent + message_parts > INSTANCE_MPS_RATE_LIMIT:
-                        logger.debug(f"message parts over instance rate limit: {parts_sent + message_parts} > {INSTANCE_MPS_RATE_LIMIT}")
-                        elapsed_time = time.time() - start_time
-                        logger.debug(f"elapsed time is {elapsed_time}")
-                        if elapsed_time < RATE_LIMIT_WINDOW:
-                            wait_time = RATE_LIMIT_WINDOW - elapsed_time
-                            logger.debug(f"Less than rate limit ({RATE_LIMIT_WINDOW} seconds) passed: {elapsed_time}. Waiting {wait_time} seconds")
-                            time.sleep(wait_time)  # Wait until the next window
-                            # Reset start_time and parts_sent count for the new window
-                            start_time = time.time()
-                            parts_sent = 0
-                            logger.debug("reset parts sent count and start time")
-                        else:
-                            logger.debug(f"More than rate limit ({RATE_LIMIT_WINDOW} seconds) passed: {elapsed_time}. resetting time and parts sent count")
-                            start_time = time.time()
-                            # Reset start_time and parts_sent count for the new window
-                            parts_sent = 0
-                            logger.debug("reset parts sent count and start time")
+            # if (body['communicationmode'] == 'sms') and (is_go_time(curr_datetime) == True):
+            origination_number = origination_number
+            destination_number = to_sms
+            message_body = body['message']
+            message_type = 'TRANSACTIONAL'
+            logger.debug("Sending SMS message.")
+            # logger.debug(f'app_id:{app_id}')
+            logger.debug(f'origination_number:{origination_number}')
+            logger.debug(f'destination_number:{destination_number}')
 
-            if (body['communicationmode'] == 'sms') and (is_go_time(curr_datetime) == True):
-                origination_number = origination_number
-                destination_number = to_sms
-                message_body = body['message']
-                message_type = 'TRANSACTIONAL'
-                logger.debug("Sending SMS message.")
-                logger.debug(f'app_id:{app_id}')
-                logger.debug(f'origination_number:{origination_number}')
-                logger.debug(f'destination_number:{destination_number}')
+            response = send_sms_message(
+                # app_id,
+                # origination_number,
+                destination_number,
+                message_body,
+                # message_type,
+                # keyword
+            )
 
-                response = send_sms_message(
-                    app_id,
-                    origination_number,
-                    destination_number,
-                    message_body,
-                    message_type,
-                    keyword
-                )
+                # if USE_MPS_RATE_LIMITING:
+                #     parts_sent += message_parts
 
-                if USE_MPS_RATE_LIMITING:
-                    parts_sent += message_parts
-
-            elif body['communicationmode'] == 'sms':
-                logger.info('Time beyond permitted window of operation. Hence not sending')
-                continue
-            else:
-                logger.error('Error occurred when sending sms as appropriate communnication_channel could not be found')
-                continue
+            # elif body['communicationmode'] == 'sms':
+            #     logger.info('Time beyond permitted window of operation. Hence not sending')
+            #     continue
+            # else:
+            #     logger.error('Error occurred when sending sms as appropriate communnication_channel could not be found')
+            #     continue
 
         except Exception:
             logger.exception("Error occurred when sending sms")
             failed_message_ids.add(message_id)
         else:
             try:
-                result_message_id = response['MessageResponse']['Result'][to_sms]['MessageId']
+                result_message_id = response['MessageId']
                 body['action_id'] = result_message_id
                 body['source_action_id'] = result_message_id
                 body['from'] = origination_number
@@ -167,8 +168,7 @@ def lambda_handler(event, context):
         }
 
 
-def send_sms_message(app_id, origination_number, destination_number, message,
-                     message_type, keyword):
+def send_sms_message(destination_number, message):
     """
     Sends an SMS message using the AWS Pinpoint service.
 
@@ -191,36 +191,101 @@ def send_sms_message(app_id, origination_number, destination_number, message,
     logger.info(f"sending message: {message}")
     for attempt in range(PINPOINT_MAX_RETRIES + 1):
         try:
-            response = pinpoint_client.send_messages(
-                ApplicationId=app_id,
-                MessageRequest={
-                    'Addresses': {destination_number: {'ChannelType': 'SMS'}},
-                    'MessageConfiguration': {
-                        'SMSMessage': {
-                            'Body': message,
-                            'MessageType': message_type,
-                            'Keyword': keyword,
-                            'OriginationNumber': origination_number}}})
+            response = SNS.publish(
+                PhoneNumber=destination_number,  # e.g. "+911234567890"
+                Message=message,  # e.g. "Your OTP is 123456"
+                # MessageAttributes={
+                #     'AWS.SNS.SMS.SMSType': {
+                #         'DataType': 'String',
+                #         'StringValue': 'Transactional'
+                #     },
+                #     'AWS.SNS.SMS.SenderID': {
+                #         'DataType': 'String',
+                #         'StringValue': 'SnsTest'  # Optional, else falls back to default
+                #     }
+                # }
+            )
 
-            result_status_code = response['MessageResponse']['Result'][destination_number]['StatusCode']
+            logger.info(f"SNS response: {response}")
 
-            if result_status_code == 200:
-                logger.info("Message sent successfully")
-                return response
-            elif result_status_code == 429:
-                if attempt >= PINPOINT_MAX_RETRIES:
-                    logger.error(f"Reached Max retry limit ({PINPOINT_MAX_RETRIES}). Failed to send sms message. Pinpoint response: {response}")
-                    raise MaxRetryReachedError
+            # result_status_code = response['MessageResponse']['Result'][destination_number]['StatusCode']
 
-                # exponential backoff with jitter
-                delay = min(PINPOINT_RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, PINPOINT_RETRY_JITTER), PINPOINT_MAX_RETRY_DELAY)
-                logger.info(f"Too Many Requests response. Retry number: {attempt + 1}. Retrying in {delay} secs...")
-                time.sleep(delay)
-            else:
-                logger.error(f"Unexpected Pinpoint result status code. Pinpoint response: {response}")
-                raise Exception("Unexpected Pinpoint result status code")
+
+            # if result_status_code == 200:
+            logger.info("Message sent successfully")
+            return response
+            # elif result_status_code == 429:
+            #     if attempt >= PINPOINT_MAX_RETRIES:
+            #         logger.error(f"Reached Max retry limit ({PINPOINT_MAX_RETRIES}). Failed to send sms message. Pinpoint response: {response}")
+            #         raise MaxRetryReachedError
+            #
+            #     # exponential backoff with jitter
+            #     delay = min(PINPOINT_RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, PINPOINT_RETRY_JITTER), PINPOINT_MAX_RETRY_DELAY)
+            #     logger.info(f"Too Many Requests response. Retry number: {attempt + 1}. Retrying in {delay} secs...")
+            #     time.sleep(delay)
+            # else:
+            #     logger.error(f"Unexpected Pinpoint result status code. Pinpoint response: {response}")
+            #     raise Exception("Unexpected Pinpoint result status code")
         except Exception:
             logger.error("Failed to send Pinpoint sms message.")
+            raise
+
+
+# def send_sms_message(app_id, origination_number, destination_number, message,
+#                      message_type, keyword):
+#     """
+#     Sends an SMS message using the AWS Pinpoint service.
+#
+#     Args:
+#         app_id: The ID of the AWS Pinpoint app to use.
+#         origination_number: The phone number to use as the sender of the SMS message.
+#         destination_number: The phone number to send the SMS message to.
+#         message: The body of the SMS message.
+#         message_type: The type of SMS message. This can be one of TRANSACTIONAL or PROMOTIONAL.
+#         keyword: The SMS keyword to use. This is used to identify the type of message,
+#             and is usually a short word or phrase.
+#
+#     Returns:
+#         The response from the AWS Pinpoint service, including the status of the message
+#         and any relevant metadata.
+#
+#     Raises:
+#         Exception: If an error occurs while sending the SMS message.
+#     """
+#
+#     logger.info(f"sending message: {message}")
+#     for attempt in range(PINPOINT_MAX_RETRIES + 1):
+#         try:
+#             response = pinpoint_client.send_messages(
+#                 ApplicationId=app_id,
+#                 MessageRequest={
+#                     'Addresses': {destination_number: {'ChannelType': 'SMS'}},
+#                     'MessageConfiguration': {
+#                         'SMSMessage': {
+#                             'Body': message,
+#                             'MessageType': message_type,
+#                             'Keyword': keyword,
+#                             'OriginationNumber': origination_number}}})
+#
+#             result_status_code = response['MessageResponse']['Result'][destination_number]['StatusCode']
+#
+#             if result_status_code == 200:
+#                 logger.info("Message sent successfully")
+#                 return response
+#             elif result_status_code == 429:
+#                 if attempt >= PINPOINT_MAX_RETRIES:
+#                     logger.error(f"Reached Max retry limit ({PINPOINT_MAX_RETRIES}). Failed to send sms message. Pinpoint response: {response}")
+#                     raise MaxRetryReachedError
+#
+#                 # exponential backoff with jitter
+#                 delay = min(PINPOINT_RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, PINPOINT_RETRY_JITTER), PINPOINT_MAX_RETRY_DELAY)
+#                 logger.info(f"Too Many Requests response. Retry number: {attempt + 1}. Retrying in {delay} secs...")
+#                 time.sleep(delay)
+#             else:
+#                 logger.error(f"Unexpected Pinpoint result status code. Pinpoint response: {response}")
+#                 raise Exception("Unexpected Pinpoint result status code")
+#         except Exception:
+#             logger.error("Failed to send Pinpoint sms message.")
             raise
 
 
