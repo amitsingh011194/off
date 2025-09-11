@@ -74,7 +74,7 @@ def lambda_handler(event, context):
             # app_id = body['app_id']
             origination_number = body['senderphonenumber']
             keyword = body['keyword']
-            to_sms = body["countrycode"].replace("+", "").replace(" ", "") + body['to_num']
+            to_sms = body["countrycode"].replace(" ", "") + body['to_num']
 
             logger.debug(f'recipient is {body["to_num"]}')
             curr_datetime = datetime.now(tz)
@@ -188,22 +188,27 @@ def send_sms_message(destination_number, message):
     Raises:
         Exception: If an error occurs while sending the SMS message.
     """
+    logger.info(f"destination number is {destination_number}")
     logger.info(f"sending message: {message}")
     for attempt in range(PINPOINT_MAX_RETRIES + 1):
         try:
             response = SNS.publish(
                 PhoneNumber=destination_number,  # e.g. "+911234567890"
                 Message=message,  # e.g. "Your OTP is 123456"
-                # MessageAttributes={
-                #     'AWS.SNS.SMS.SMSType': {
-                #         'DataType': 'String',
-                #         'StringValue': 'Transactional'
-                #     },
-                #     'AWS.SNS.SMS.SenderID': {
-                #         'DataType': 'String',
-                #         'StringValue': 'SnsTest'  # Optional, else falls back to default
-                #     }
-                # }
+                MessageAttributes={
+                    'AWS.SNS.SMS.SMSType': {
+                        'DataType': 'String',
+                        'StringValue': 'Transactional'
+                    },
+                    # 'AWS.SNS.SMS.SenderID': {
+                    #     'DataType': 'String',
+                    #     'StringValue': 'SnsTest'  # Optional, else falls back to default
+                    # },
+                    "AWS.MM.SMS.OriginationNumber": {
+                        "DataType": "String",
+                        "StringValue": "+19707622176"  # your short code, toll-free, or 10DLC
+                    }
+                }
             )
 
             logger.info(f"SNS response: {response}")
