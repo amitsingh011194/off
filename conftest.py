@@ -224,26 +224,26 @@ def lambda_handler(event, context):
 
 
 
-aws ssm delete-parameter --name "/saas-platform/${TENANT_ENV}/${TENANT_ID}/lambdareadonly/config_key"
+config_key
 
-aws ssm delete-parameter --name "/saas-platform/${TENANT_ENV}/${TENANT_ID}/lambdareadonly/TW_POLICY"
+TW_POLICY
 
-aws ssm delete-parameter --name "/saas-platform/${TENANT_ENV}/${TENANT_ID}/lambdareadonly/configuration_path"
+configuration_path
 
-aws ssm delete-parameter --name "/saas-platform/${TENANT_ENV}/${TENANT_ID}/lambdareadonly/json_config_s3_key"
+json_config_s3_key
 
-aws ssm delete-parameter --name "/saas-platform/${TENANT_ENV}/${TENANT_ID}/lambdareadonly/metadata_path"
+metadata_path
 
-aws ssm delete-parameter --name "/saas-platform/${TENANT_ENV}/${TENANT_ID}/lambdareadonly/region_name"
+region_name
 
-aws ssm delete-parameter --name "/saas-platform/${TENANT_ENV}/${TENANT_ID}/lambdareadonly/s3_bucket_name"
+s3_bucket_name
 
-aws ssm delete-parameter --name "/saas-platform/${TENANT_ENV}/${TENANT_ID}/lambdareadonly/summary_csv_s3_prefix"
+summary_csv_s3_prefix
 
-aws ssm delete-parameter --name "/saas-platform/${TENANT_ENV}/${TENANT_ID}/lambdareadonly/target_path"
+target_path
 
-aws ssm delete-parameter --name "/saas-platform/${TENANT_ENV}/${TENANT_ID}/lambdareadonly/target_path_test"
+target_path_test
 
-aws ssm delete-parameter --name "/saas-platform/${TENANT_ENV}/${TENANT_ID}/lambdareadonly/timezone"
+timezone
 
 
