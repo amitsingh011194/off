@@ -210,3 +210,11 @@ def lambda_handler(event, context):
         'statusCode': 200,
         'body': 'Success!'
     }
+
+
+
+{
+  "TENANT_ID": "${TENANT_ID}",
+  "ENV_ID": "${ENV_ID}",
+  "CUSTOMER_ID": "${CUSTOMER_ID}"
+}
