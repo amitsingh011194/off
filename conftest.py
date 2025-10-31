@@ -218,3 +218,6 @@ def lambda_handler(event, context):
   "ENV_ID": "${ENV_ID}",
   "CUSTOMER_ID": "${CUSTOMER_ID}"
 }
+
+
+/saas-platform/psprod1/3a5c0629/lambdareadonlyreadrepl/json_config_s3_key
