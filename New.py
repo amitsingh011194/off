@@ -1,262 +1,209 @@
-import json
-import boto3
-import psycopg2
-import os
-import io
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-from io import BytesIO
-from datetime import datetime
-import pytz
-import logging
-import gc
-from psycopg2 import OperationalError, ProgrammingError
-from config import (
-    upload_parquet_to_s3, save_config_to_s3, load_config,
-    fix_datetime_columns, fill_nulls_for_tables, upload_summary_csv_to_s3,
-    get_db_credentials
-)
 
-# --------------------------
-# Logging setup
-# --------------------------
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+# fnbo and af s3 triggers go here
+resource "aws_s3_bucket_notification" "skeps_gatekeeper_bucket_fnbo" {
+  bucket = "${var.customer_id}-tops-${var.environment}-s3-dps"
 
-# --------------------------
-# AWS clients
-# --------------------------
-s3 = boto3.client('s3')
-ssm = boto3.client('ssm')
+  count = var.customer_id == "fnbo" ? 1 : 0
 
-# --------------------------
-# Load configuration from SSM
-# --------------------------
-def load_config_from_ssm():
-    """
-    Dynamically load all Lambda configuration from AWS SSM Parameter Store.
-    Path format:
-        /saas-platform/{ENV_ID}/{CUSTOMER_ID}/lambdareadonlyreadrepl/<param-name>
-    """
-    env_id = os.environ.get('ENV_ID')
-    customer_id = os.environ.get('CUSTOMER_ID')
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-gatekeeper"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/fnbo/etl/original-files/"
+  }
 
-    if not env_id or not customer_id:
-        raise ValueError("Both ENV_ID and CUSTOMER_ID environment variables must be set.")
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-etl"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/fnbo/etl/manageable-files/etl/"
+  }
 
-    base_path = f"/saas-platform/{env_id}/{customer_id}/lambdareadonlyreadrepl/"
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-datachecks"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/fnbo/etl/manageable-files/datacheck/"
+  }
 
-    param_keys = [
-        "config_key",
-        "TW_POLICY",
-        "configuration_path",
-        "json_config_s3_key",
-        "metadata_path",
-        "region_name",
-        "s3_bucket_name",
-        "summary_csv_s3_prefix",
-        "target_path",
-        "target_path_test",
-        "timezone"
-    ]
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-selective-data-loader"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/fnbo/etl/process-start/"
+  }
 
-    config = {}
-    for key in param_keys:
-        param_name = f"{base_path}{key}"
-        try:
-            response = ssm.get_parameter(Name=param_name, WithDecryption=True)
-            value = response['Parameter']['Value']
-            config[key] = value
-            logger.info(f"Loaded SSM parameter: {param_name}")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not fetch SSM parameter {param_name}: {str(e)}")
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-file-merger"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/fnbo/etl/manageable-files/file-merger/"
+  } 
 
-    return config
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-gatekeeper"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/af/etl/original-files/"
+  }
+  
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-etl"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/af/etl/manageable-files/etl/"
+  }
 
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-datachecks"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/af/etl/manageable-files/datacheck/"
+  }
 
-# --------------------------
-# Initialize configuration
-# --------------------------
-CONFIG_ENV = load_config_from_ssm()
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-selective-data-loader"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/af/etl/process-start/"
+  }
 
-config_key = CONFIG_ENV.get('config_key')
-json_config_s3_key = CONFIG_ENV.get('json_config_s3_key')
-region_name = CONFIG_ENV.get('region_name')
-s3_bucket_name = CONFIG_ENV.get('s3_bucket_name')
-summary_csv_s3_prefix = CONFIG_ENV.get('summary_csv_s3_prefix')
-target_path = CONFIG_ENV.get('target_path')
-target_path_test = CONFIG_ENV.get('target_path_test')
-timezone = CONFIG_ENV.get('timezone')
-tw_policy = CONFIG_ENV.get('TW_POLICY')
-metadata_path = CONFIG_ENV.get('metadata_path')
-configuration_path = CONFIG_ENV.get('configuration_path')
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-file-merger"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/af/etl/manageable-files/file-merger/"
+  }
 
-# hardcode path for removable columns (optional, can also come from SSM if needed)
-key = ""
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-af_forwardflow_savefile"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/af/legacy/forward-flow/"
+  }
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-af-paper-statement"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/af/reports/paper_statement/ps_start/"
+  }
 
-current_date = datetime.now().strftime("%Y-%m-%d")
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-gatekeeper"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/ucl/etl/original-files/"
+  }
+  
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-etl"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/ucl/etl/manageable-files/etl/"
+  }
 
-# --------------------------
-# Fetch credentials from Secrets Manager
-# --------------------------
-db_credentials = get_db_credentials()
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-datachecks"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/ucl/etl/manageable-files/datacheck/"
+  }
 
-db_host = db_credentials['host']
-db_name = db_credentials['dbname']
-db_user = db_credentials['username']
-db_password = db_credentials['password']
-db_port = db_credentials['port']
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-selective-data-loader"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/ucl/etl/process-start/"
+  }
 
-#  Set static end_date as requested
-end_date = datetime.strptime('2025-09-17', "%Y-%m-%d")
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-file-merger"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/ucl/etl/manageable-files/file-merger/"
+  }
 
-# --------------------------
-# Columns to remove
-# --------------------------
-try:
-    response = s3.get_object(Bucket=s3_bucket_name, Key=key)
-    content = response['Body'].read().decode('utf-8')
-    removecolumns = json.loads(content)
-    logger.info(f"Columns to remove: {removecolumns}")
-except Exception as e:
-    logger.error(f"Error reading remove_columns.json from S3: {str(e)}")
-    removecolumns = []
+  lambda_function {
+     lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:pos-techops-serverless-${var.environment}-agencyPostingHandler"
+     events              = ["s3:ObjectCreated:*"]
+     filter_prefix       = "clients/fnbo/agencyFiles/process_start"
+     filter_suffix       = ".csv"
+  }
 
-# --------------------------
-# Lambda handler
-# --------------------------
-def lambda_handler(event, context):
-    config = load_config()
-    chunk_size = 1000
-    summary_data = []
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:pos-techops-serverless-${var.environment}-agencyPostingHandler"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/af/agencyFiles/process_start"
+    filter_suffix       = ".csv"
+  }
 
-    try:
-        for table in config:
-            try:
-                conn = psycopg2.connect(
-                    host=db_host, database=db_name, user=db_user,
-                    password=db_password, port=db_port
-                )
-                cursor = conn.cursor()
-                logger.info(f"New DB connection established for table: {table.get('TableName')}")
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:pos-techops-serverless-${var.environment}-agencyPostingHandler"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/ucl/agencyFiles/process_start"
+    filter_suffix       = ".csv"
+  }
 
-                if table.get('IsActive') == 'y':
-                    table_name = table.get('TableName')
-                    query = table.get('SqlStatement')
-                    where_clause = table.get('WhereClause')
-                    logger.info(f"Where clause flag for {table_name} is {where_clause}")
+  depends_on = [
+    module.deploy_lambdas,
+    aws_lambda_permission.lambda_gate_permission,
+    aws_lambda_permission.lambda_etl_permission,
+    aws_lambda_permission.lambda_datachecks_permission,
+    aws_lambda_permission.lambda_data_loader_permission,
+    aws_lambda_permission.lambda_file_merge_permission,
+    aws_lambda_permission.lambda_forwardflow_savefile_permission,
+    aws_lambda_permission.lambda_paper_statement_permission,
+    aws_lambda_permission.lambda_agency_posting
+  ]
+}
+# other customer triggers go here
+resource "aws_s3_bucket_notification" "skeps_gatekeeper_bucket_customers" {
+  bucket = "${var.customer_id}-tops-${var.environment}-s3-dps"
 
-                    # Use LastRunDate from config as start_date
-                    start_date = datetime.strptime(table.get('LastRunDate'), "%Y-%m-%d")
+  count = var.customer_id != "fnbo" ? 1 : 0
 
-                    if where_clause == 'y':
-                        incremental_column = table.get('IncrementalColumn')
-                        if incremental_column and incremental_column.strip():
-                            date_filter = (
-                                f"{incremental_column} BETWEEN '{start_date.strftime('%Y-%m-%d')} 00:00:00' "
-                                f"AND '{end_date.strftime('%Y-%m-%d')} 23:59:59' AND {incremental_column} IS NOT NULL"
-                            )
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-gatekeeper"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/${var.customer_id}/etl/original-files/"
+  }
 
-                            if "WHERE" in query.upper():
-                                query += f" AND {date_filter}"
-                            else:
-                                query += f" WHERE {date_filter}"
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-etl"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/${var.customer_id}/etl/manageable-files/etl/"
+  }
 
-                            logger.info(f"Final query for {table_name}: {query}")
-                        else:
-                            logger.warning(f"Skipping date filter for table {table_name} due to missing IncrementalColumn.")
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-datachecks"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/${var.customer_id}/etl/manageable-files/datacheck/"
+  }
 
-                    logger.info(f"Query execution started: {query}")
-                    cursor.execute(query)
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-selective-data-loader"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/${var.customer_id}/etl/process-start/"
+  }
 
-                    if table.get('IsIncrementalLoad') != 'y':
-                        table['IsActive'] = 'n'
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-skeps-file-merger"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/${var.customer_id}/etl/manageable-files/file-merger/"
+  }
 
-                    colnames_all = [desc[0] for desc in cursor.description]
-                    colnames = [col for col in colnames_all if col not in removecolumns]
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-clp-ach-reconciliation-report"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/${var.customer_id}/outbound/servicing/nacha/"
+  }
 
-                    chunk_number = 1
-                    total_rows = 0
+  lambda_function {
+    lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:tops-etl-${var.environment}-clp-ach-api-reconciliation-report"
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "clients/${var.customer_id}/reports/ach_reconciliation_report/ps_start/"
+  }
 
-                    while True:
-                        rows = cursor.fetchmany(chunk_size)
-                        if not rows:
-                            logger.info(f"No data found for table {table_name}. Uploading empty Parquet file.")
-                            summary_data.append({
-                                'TableName': table_name,
-                                'ChunksCreated': 0,
-                                'TotalRecords': 0,
-                                'ProcessedDate': current_date
-                            })
-                            table['LastRunDate'] = end_date.strftime("%Y-%m-%d")
-                            break
+  lambda_function {
+     lambda_function_arn = "arn:aws:lambda:us-east-1:${data.aws_caller_identity.current.account_id}:function:pos-techops-serverless-${var.environment}-agencyPostingHandler"
+     events              = ["s3:ObjectCreated:*"]
+     filter_prefix       = "clients/${var.customer_id}/agencyFiles/process_start"
+     filter_suffix       = ".csv"
+  }
 
-                        df = pd.DataFrame(rows, columns=colnames)
-                        logger.info(f"Chunk {chunk_number} of table {table_name} has {len(df)} rows.")
-                        total_rows += len(df)
+  depends_on = [
+    module.deploy_lambdas,
+    aws_lambda_permission.lambda_gate_permission,
+    aws_lambda_permission.lambda_etl_permission,
+    aws_lambda_permission.lambda_datachecks_permission,
+    aws_lambda_permission.lambda_data_loader_permission,
+    aws_lambda_permission.lambda_file_merge_permission,
+    aws_lambda_permission.lambda_paper_statement_permission,
+    aws_lambda_permission.lambda_clp_ach_reconciliation_report_permission,
+    aws_lambda_permission.lambda_clp_ach_api_reconciliation_report_permission
 
-                        df = fix_datetime_columns(df)
-                        df = fill_nulls_for_tables(df)
-
-                        buffer = io.BytesIO()
-                        writer = None
-                        batch_size = 1000
-
-                        for start in range(0, len(df), batch_size):
-                            batch_df = df.iloc[start:start + batch_size]
-                            batch_table = pa.Table.from_pandas(batch_df, preserve_index=False)
-                            if writer is None:
-                                writer = pq.ParquetWriter(buffer, batch_table.schema)
-                            writer.write_table(batch_table)
-                            del batch_df, batch_table
-                            gc.collect()
-
-                        if writer:
-                            writer.close()
-
-                        year = start_date.strftime("%Y")
-                        month = start_date.strftime("%m")
-                        day = start_date.strftime("%d")
-                        s3_path = f"{target_path}{table_name}/year={year}/month={month}/day={day}/data_chunk{chunk_number}_{start_date.date()}.parquet"
-
-                        s3.put_object(Bucket=s3_bucket_name, Key=s3_path, Body=buffer.getvalue())
-                        logger.info(f"Uploaded chunk {chunk_number} of table {table_name} to {s3_path}")
-                        chunk_number += 1
-
-                        del df, writer, buffer
-                        gc.collect()
-
-                    logger.info(f"Total rows processed for table {table_name}: {total_rows}")
-                    table['LastRunDate'] = end_date.strftime("%Y-%m-%d")
-
-                    summary_data.append({
-                        'TableName': table_name,
-                        'ChunksCreated': chunk_number - 1,
-                        'TotalRecords': total_rows,
-                        'ProcessedDate': current_date
-                    })
-
-                try:
-                    cursor.close()
-                    conn.close()
-                    logger.info(f"Closed DB connection for table: {table.get('TableName')}")
-                except Exception as close_err:
-                    logger.info(f"Error closing DB connection for table {table.get('TableName')}: {close_err}")
-
-            except ProgrammingError as pe:
-                logger.info(f"Query error in table {table.get('TableName')}: {pe}")
-            except Exception as e:
-                logger.info(f"Unexpected error while processing table {table.get('TableName')}: {e}")
-
-        logger.info(f"Loading metadata for {len(summary_data)} tables")
-        upload_summary_csv_to_s3(summary_data, s3_bucket_name, summary_csv_s3_prefix, start_date, end_date)
-
-    except OperationalError as oe:
-        logger.info(f"Database connection failed: {oe}")
-    except Exception as e:
-        logger.info(f"Unexpected error in Lambda handler: {e}")
-    finally:
-        save_config_to_s3(config, s3_bucket_name, json_config_s3_key)
-
-    return {'statusCode': 200, 'body': 'Success!'}
+  ]
+}
