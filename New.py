@@ -1,77 +1,299 @@
-resource "aws_lambda_function" "deploy_lambda" {
-  function_name    = "${var.customer}-ssp-${var.env}-lambda-${var.lambda_name}"
-  description      = "Created in repo loan-servicing-api commit:${var.commit_id} branch:${var.branch} " 
-  role             = aws_iam_role.lambda_iam_role.arn
-  handler          = (
-    var.lambda_name == "${var.customer}-ivr-processing" || 
-    var.lambda_name == "${var.customer}-ivr-tabapay-call" ||
-    var.lambda_name == "${var.customer}-ivr-conduent-call" || 
-    var.lambda_name == "${var.customer}-campaign-activity-code" ||
-    var.lambda_name == "${var.customer}-campaign-customer-profiles" ||
-    var.lambda_name == "${var.customer}-ivr-ssp-integration" ||
-    var.lambda_name == "${var.customer}-campaign-customerdata-manupulation" ||
-    var.lambda_name == "${var.customer}-campaign-database-update" ||
-    var.lambda_name == "${var.customer}-campaign-run-status" ||
-    var.lambda_name == "${var.customer}-campaign-lambda" || 
-    var.lambda_name == "${var.customer}-campaign-profiles-manupulation"
-  ) ? "lambda_function.lambda_handler" : "index.lambda_handler"
-  runtime          = (
-    var.lambda_name == "${var.customer}-ivr-processing" || 
-    var.lambda_name == "${var.customer}-ivr-tabapay-call" ||
-    var.lambda_name == "${var.customer}-ivr-conduent-call" || 
-    var.lambda_name == "${var.customer}-campaign-activity-code" ||
-    var.lambda_name == "${var.customer}-campaign-customer-profiles" ||
-    var.lambda_name == "${var.customer}-ivr-ssp-integration" ||
-    var.lambda_name == "${var.customer}-campaign-customerdata-manupulation" ||
-    var.lambda_name == "${var.customer}-campaign-database-update" ||
-    var.lambda_name == "${var.customer}-campaign-run-status" ||
-    var.lambda_name == "${var.customer}-campaign-lambda" || 
-    var.lambda_name == "${var.customer}-campaign-profiles-manupulation"
-  ) ? "python3.10" : "nodejs20.x"
-  memory_size      = 5120
-  timeout          = 600
-  s3_bucket        = "exl-${var.customer}-${var.env}-templates"
-  s3_key           = "lambdas/${var.lambda_name}"
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 
-  # Conditionally set layers only if the lambda is "${var.customer}-ivr-tabapay-call"
-  layers = ( 
-    var.lambda_name == "${var.customer}-campaign-customer-profiles" || 
-    var.lambda_name == "${var.customer}-ivr-tabapay-call" || 
-    var.lambda_name == "${var.customer}-ivr-conduent-call" || 
-    var.lambda_name == "${var.customer}-campaign-activity-code" || 
-    var.lambda_name == "${var.customer}-ivr-ssp-integration" ||
-    var.lambda_name == "${var.customer}-campaign-customerdata-manupulation" ||
-    var.lambda_name == "${var.customer}-campaign-database-update" ||
-    var.lambda_name == "${var.customer}-campaign-run-status" ||
-    var.lambda_name == "${var.customer}-campaign-lambda" || 
-    var.lambda_name == "${var.customer}-campaign-profiles-manupulation"
-    ) ? var.lambda_layer_arns : []
-    
-    signing_profile_version_arn = var.code_signing_profile_arn
+properties([
+    parameters([
+        choice(name: 'CUSTOMER', choices: ['demo','fhc', 'lcc', 'fdr', 'nrg', 'nrgr', 'tdb', 'hsbcinm', 'hsbcmyh', 'sce', 'bcs', 'omf', 'lfs', 'clientdemo'], description: 'Which Customer do you want to deploy'),
+        choice(name: 'ENVIRONMENT', choices: ['dev','uat','prod'], description: 'Which Enviornment you want to deploy to'),
+        booleanParam(name: 'BUILD_JAVA_LAMBDA', defaultValue: false, description: 'Also build the Java lambda - this takes a lot of time'),
+        booleanParam(name: 'RUN_DB_MIGRATION', defaultValue: false, description: 'Set to true to run Flyway'),
+        booleanParam(name: 'RUN_CLI_SCRIPT', defaultValue: false, description: 'Run CLI script - Applicable for ClientDemo, DEMO, LCC, NRG, NRGR, HSBCinm, HSBCmyh Tenants!')
+    ])
+])
 
-    dead_letter_config {
-    target_arn = var.lambda_dlq_arn
-  }
-  reserved_concurrent_executions = var.lambda_concurrency_limit
+pipeline {
+    agent  {
+        label 'cicd' 
+    }
 
-  vpc_config {
-    subnet_ids         = var.lambda_subnet_ids
-    security_group_ids = var.lambda_security_group_ids
-  }
-  environment {
-    variables = fileexists("${var.lambda_path}/env_vars.json") ? jsondecode(templatefile("${var.lambda_path}/env_vars.json", { 
-            ACCOUNT_ID  = var.aws_acct_id, 
-            AWS_REGION  = var.aws_region, 
-            CUSTOMER_ID = var.customer, 
-            ENVIRONMENT = var.environment 
-          })) : {}
-  }
+    environment {
+        CUSTOMER="${params.CUSTOMER}"
+        ENVIRONMENT="${params.ENVIRONMENT}"
+        GIT_REPO_URL="https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-dgt-paymentor-core-aws-app.git"
+        OIDC_ROLE_NAME="paymentor-oidc-role"
+    }
 
-  kms_key_arn = var.kms_key_id
+    stages {
+        stage('Auth Check') {
+            when {
+                expression { "${ENVIRONMENT}" != "dev" }
+            }
+            steps {
+                script {
+                    sh """
+                        chmod +x scripts/env-protection.sh && ./scripts/env-protection.sh deploy
+                    """
+                }
+            }
+        }
+        stage('Get customer mapping') {
+            steps {
+                script {
+                    // Set job description on Jenkins UI
+                    currentBuild.description = "CUSTOMER: ${env.CUSTOMER} \n ENVIRONMENT: ${env.ENVIRONMENT} \n BUILT BY: ${env.BUILD_USER_ID}"
 
-  tracing_config {
-    mode = "Active"
-  }
-  depends_on = [aws_s3_object.upload_lambda_zip]
+                    // Define environment-to-account ID mapping
+                    def envAccountMap = [
+                        dev: '607436280417',
+                        uat: '658960620175',
+                        prod: '016795361898'
+                    ]
+
+                    def envAccountMapLFS = [
+                        dev: '116981803571',
+                        uat: '216989139664',
+                        prod: '767828744639'
+                    ]
+
+                    def envAccountMapHSBC = [
+                        dev: '088082905288',
+                        uat: '793586321398',
+                        prod: '501957928506' 
+                    ]
+                    def envAccountMapFDR = [
+                        dev: '975949451286',
+                        uat: '069295248160',
+                        prod: '609714460132'
+                    ]
+
+                    // Select the appropriate map based on the CUSTOMER parameter
+                    def selectedMap
+                    if (params.CUSTOMER == 'lfs') {
+                        selectedMap = envAccountMapLFS
+                  } else if (params.CUSTOMER == 'hsbcinm' || params.CUSTOMER == 'hsbcmyh') {
+                        selectedMap = envAccountMapHSBC
+                    }
+                   else if (params.CUSTOMER == 'fdr') {
+                        selectedMap = envAccountMapFDR
+                    } 
+                   else {
+                        selectedMap = envAccountMap
+                    }
+
+                     // Get the account ID based on selected TARGET_ENV
+                    env.AWS_ACCOUNT_ID = selectedMap[params.ENVIRONMENT]
+
+
+                    env.AWS_ROLE_ARN = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
+                    
+                    // Get TENANT_ENV and TENANT_ID from customer json file
+                    env.TENANT_ENV = sh(script: "jq -r --arg env '${ENVIRONMENT}' '.[\$env].tenant_env' resources/customer-mapping/${CUSTOMER}.json", returnStdout: true).trim()
+                    env.TENANT_ID = sh(script: "jq -r --arg env '${ENVIRONMENT}' '.[\$env].tenant_id' resources/customer-mapping/${CUSTOMER}.json", returnStdout: true).trim()
+
+                    echo "Selected ENVIRONMENT: ${ENVIRONMENT}"
+                    echo "Mapped AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID}"
+                    echo "AWS_ROLE_ARN: ${AWS_ROLE_ARN}"
+                    echo "TENANT_ID: ${TENANT_ID}"
+                    echo "TENANT_ENV: ${TENANT_ENV}"
+                }
+            }
+        }
+       stage('Checkout App repo') {
+    steps {
+        script {
+            sh """
+                set -e
+
+                echo "Cloning repo..."
+                git clone ${GIT_REPO_URL}
+
+                cd bu-dgt-paymentor-core-aws-app
+                git checkout client/${CUSTOMER}/${ENVIRONMENT}
+
+                echo "========================================"
+                echo "Workspace inside repo after checkout:"
+                echo "========================================"
+                ls -l
+
+                SRC_DIR="devops_handled_lambdas"
+                DEST_DIR="application/lambdas"
+
+                echo "========================================"
+                echo "Checking for \$SRC_DIR at repo root..."
+                echo "========================================"
+
+                if [ -d "\${SRC_DIR}" ]; then
+        mkdir -p "\${DEST_DIR}"
+        cp -r "\${SRC_DIR}"/. "\${DEST_DIR}"/
+        rm -rf "\${SRC_DIR}"
+    else
+        echo "Folder '\${SRC_DIR}' not found. Skipping."
+    fi
+
+                echo "========================================"
+                echo "Final lambdas directory structure:"
+                echo "========================================"
+                ls -l "\$DEST_DIR" || true
+            """
+        }
+    }
 }
+
+        stage('Build Java lambda') {
+            when {
+                allOf {
+                    expression { currentBuild.result != 'ABORTED' } // Only run if not aborted
+                    expression { params.BUILD_JAVA_LAMBDA }
+                }
+            }
+            steps {
+                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+                    script {
+                        ansiColor('xterm') {
+                            sh """
+                                chmod +x ./scripts/build-java-lambda.sh && ./scripts/build-java-lambda.sh
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+    
+
+        
+        stage('terraform plan') {
+            steps {
+                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+                    script {
+                        ansiColor('xterm') {
+                            sh """
+                                cd bu-dgt-paymentor-core-aws-app/cicd
+                                terraform init -upgrade -backend-config="bucket=${AWS_ACCOUNT_ID}-paymentor-tf-state-mgmt" -backend-config="key=${TENANT_ENV}/${TENANT_ID}/terraform.tfstate"
+                                terraform validate
+                                terraform plan -out=tfplan -var "customer_id=${TENANT_ID}" -var "env_id=${TENANT_ENV}" -var "target_env=${ENVIRONMENT}" -var-file="tfvars/${ENVIRONMENT}.tfvars"
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        stage('Run terraform Apply?') {
+            input {
+                message 'Continue with deploy?'
+                ok 'Approve'
+                submitter "${env.BUILD_USER_ID}"
+            }
+
+            steps {
+                echo "Deployment approved by ${env.BUILD_USER_ID}."
+            }
+        }
+      
+        stage('terraform apply') {
+            steps {
+                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+                    script {
+                        ansiColor('xterm') {
+                            sh """
+                                cd bu-dgt-paymentor-core-aws-app/cicd
+                                terraform apply -input=false -auto-approve -var "customer_id=${TENANT_ID}" -var "env_id=${TENANT_ENV}" -var "target_env=${ENVIRONMENT}" -var-file="tfvars/${ENVIRONMENT}.tfvars"
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Configure Pinpoint Event Destination') {
+  when { expression { params.RUN_CLI_SCRIPT } }
+  steps {
+    withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+      script {
+        def configSetName = "sb-${TENANT_ENV}-${TENANT_ID}-sms-config"
+        def eventDestName = "sb-${TENANT_ENV}-${TENANT_ID}-sms-event-destination"
+        def firehoseName  = "sb-${TENANT_ENV}-${TENANT_ID}-pinpoint-sms-to-s3"
+        def roleArn       = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/sb-${TENANT_ENV}-${TENANT_ID}-pinpoint-event-to-firehose-role"
+
+        echo "Fetching Firehose ARN for stream: ${firehoseName}"
+        def firehoseArn = sh(
+          script: "aws firehose describe-delivery-stream --delivery-stream-name ${firehoseName} --query 'DeliveryStreamDescription.DeliveryStreamARN' --output text",
+          returnStdout: true
+        ).trim()
+
+        echo "Using Configuration Set: ${configSetName}"
+        echo "Using Event Destination Name: ${eventDestName}"
+        echo "Using Role ARN: ${roleArn}"
+        echo "Using Firehose ARN: ${firehoseArn}"
+
+        // Ensure the stream is fully ready (optional)
+        sh "sleep 10"
+
+        // Write destination JSON to avoid escape issues
+        writeFile file: 'firehose-dest.json', text: """{
+          "DeliveryStreamArn": "${firehoseArn}",
+          "IamRoleArn": "${roleArn}"
+        }"""
+
+        // Create (or re-create) the destination
+        sh """
+  set -e
+
+  echo "Checking if event destination exists..."
+  EXISTS=\$(aws pinpoint-sms-voice-v2 describe-configuration-sets \
+    --configuration-set-names ${configSetName} \
+    --query "length(ConfigurationSets[0].EventDestinations[?EventDestinationName=='${eventDestName}'])" \
+    --output text)
+
+  if [ "\$EXISTS" = "0" ] || [ "\$EXISTS" = "None" ]; then
+    echo "Event destination not found; creating..."
+    aws pinpoint-sms-voice-v2 create-event-destination \
+      --configuration-set-name ${configSetName} \
+      --event-destination-name ${eventDestName} \
+      --matching-event-types TEXT_ALL \
+      --kinesis-firehose-destination file://firehose-dest.json \
+      --cli-binary-format raw-in-base64-out
+  else
+    echo "Event destination exists; updating..."
+    aws pinpoint-sms-voice-v2 update-event-destination \
+      --configuration-set-name ${configSetName} \
+      --event-destination-name ${eventDestName} \
+      --matching-event-types TEXT_ALL \
+      --kinesis-firehose-destination file://firehose-dest.json \
+      --enabled
+  fi
+"""
+      }
+    }
+  }
+}
+
+
+
+
+        stage('flyway deployment') {
+            when {
+                allOf {
+                    expression { currentBuild.result != 'ABORTED' } // Only run if not aborted
+                    expression { params.RUN_DB_MIGRATION }
+                }
+            }
+            steps {
+                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+                    script {
+                        sh """
+                        chmod +x ./scripts/flyway.sh && ./scripts/flyway.sh
+                        """
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            deleteDir()
+        }
+    }
+}
+
+
+here's my current jenkins file, 
+Let's add those stages,.  and let's also make sure that we are only running them optionally since they wont be enabled for all the tenants
