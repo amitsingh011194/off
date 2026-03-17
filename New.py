@@ -5,7 +5,12 @@ properties([
         choice(name: 'ENVIRONMENT', choices: ['dev','uat','prod'], description: 'Which Enviornment you want to deploy to'),
         booleanParam(name: 'BUILD_JAVA_LAMBDA', defaultValue: false, description: 'Also build the Java lambda - this takes a lot of time'),
         booleanParam(name: 'RUN_DB_MIGRATION', defaultValue: false, description: 'Set to true to run Flyway'),
-        booleanParam(name: 'RUN_CLI_SCRIPT', defaultValue: false, description: 'Run CLI script - Applicable for ClientDemo, DEMO, LCC, NRG, NRGR, HSBCinm, HSBCmyh Tenants!')
+        booleanParam(name: 'RUN_CLI_SCRIPT', defaultValue: false, description: 'Run CLI script - Applicable for ClientDemo, DEMO, LCC, NRG, NRGR, HSBCinm, HSBCmyh Tenants!'),
+        booleanParam(
+    name: 'DEPLOY_ECS_SERVICES',
+    defaultValue: false,
+    description: 'Only applicable for LFS currently, to test out Agentic AI changes.'
+)
     ])
 ])
 
@@ -19,6 +24,8 @@ pipeline {
         ENVIRONMENT="${params.ENVIRONMENT}"
         GIT_REPO_URL="https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-dgt-paymentor-core-aws-app.git"
         OIDC_ROLE_NAME="paymentor-oidc-role"
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
+
     }
 
     stages {
@@ -34,68 +41,87 @@ pipeline {
                 }
             }
         }
-        stage('Get customer mapping') {
-            steps {
-                script {
-                    // Set job description on Jenkins UI
-                    currentBuild.description = "CUSTOMER: ${env.CUSTOMER} \n ENVIRONMENT: ${env.ENVIRONMENT} \n BUILT BY: ${env.BUILD_USER_ID}"
+       
 
-                    // Define environment-to-account ID mapping
-                    def envAccountMap = [
-                        dev: '607436280417',
-                        uat: '658960620175',
-                        prod: '016795361898'
-                    ]
+stage('Get customer mapping') {
+    steps {
+        script {
+            // Set job description on Jenkins UI
+            currentBuild.description = "CUSTOMER: ${env.CUSTOMER} \n ENVIRONMENT: ${env.ENVIRONMENT} \n BUILT BY: ${env.BUILD_USER_ID}"
 
-                    def envAccountMapLFS = [
-                        dev: '116981803571',
-                        uat: '216989139664',
-                        prod: '767828744639'
-                    ]
+            // Define environment-to-account ID mapping
+            def envAccountMap = [
+                dev: '607436280417',
+                uat: '658960620175',
+                prod: '016795361898'
+            ]
 
-                    def envAccountMapHSBC = [
-                        dev: '088082905288',
-                        uat: '793586321398',
-                        prod: '501957928506' 
-                    ]
-                    def envAccountMapFDR = [
-                        dev: '975949451286',
-                        uat: '069295248160',
-                        prod: '609714460132'
-                    ]
+            def envAccountMapLFS = [
+                dev: '116981803571',
+                uat: '216989139664',
+                prod: '767828744639'
+            ]
 
-                    // Select the appropriate map based on the CUSTOMER parameter
-                    def selectedMap
-                    if (params.CUSTOMER == 'lfs') {
-                        selectedMap = envAccountMapLFS
-                  } else if (params.CUSTOMER == 'hsbcinm' || params.CUSTOMER == 'hsbcmyh') {
-                        selectedMap = envAccountMapHSBC
-                    }
-                   else if (params.CUSTOMER == 'fdr') {
-                        selectedMap = envAccountMapFDR
-                    } 
-                   else {
-                        selectedMap = envAccountMap
-                    }
+            def envAccountMapHSBC = [
+                dev: '088082905288',
+                uat: '793586321398',
+                prod: '501957928506' 
+            ]
 
-                     // Get the account ID based on selected TARGET_ENV
-                    env.AWS_ACCOUNT_ID = selectedMap[params.ENVIRONMENT]
+            def envAccountMapFDR = [
+                dev: '975949451286',
+                uat: '069295248160',
+                prod: '609714460132'
+            ]
 
-
-                    env.AWS_ROLE_ARN = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
-                    
-                    // Get TENANT_ENV and TENANT_ID from customer json file
-                    env.TENANT_ENV = sh(script: "jq -r --arg env '${ENVIRONMENT}' '.[\$env].tenant_env' resources/customer-mapping/${CUSTOMER}.json", returnStdout: true).trim()
-                    env.TENANT_ID = sh(script: "jq -r --arg env '${ENVIRONMENT}' '.[\$env].tenant_id' resources/customer-mapping/${CUSTOMER}.json", returnStdout: true).trim()
-
-                    echo "Selected ENVIRONMENT: ${ENVIRONMENT}"
-                    echo "Mapped AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID}"
-                    echo "AWS_ROLE_ARN: ${AWS_ROLE_ARN}"
-                    echo "TENANT_ID: ${TENANT_ID}"
-                    echo "TENANT_ENV: ${TENANT_ENV}"
-                }
+            // Select the appropriate map based on the CUSTOMER parameter
+            def selectedMap
+            if (params.CUSTOMER == 'lfs') {
+                selectedMap = envAccountMapLFS
+            } else if (params.CUSTOMER == 'hsbcinm' || params.CUSTOMER == 'hsbcmyh') {
+                selectedMap = envAccountMapHSBC
+            } else if (params.CUSTOMER == 'fdr') {
+                selectedMap = envAccountMapFDR
+            } else {
+                selectedMap = envAccountMap
             }
+
+            // Get the account ID based on selected ENVIRONMENT
+            env.AWS_ACCOUNT_ID = selectedMap[params.ENVIRONMENT]
+
+            // ✅ NEW: Set AWS region dynamically
+            if (params.CUSTOMER == 'lfs') {
+                env.AWS_REGION = 'ap-southeast-2'
+            } else if (params.CUSTOMER == 'fdr') {
+                env.AWS_REGION = 'ca-central-1'
+            } else {
+                env.AWS_REGION = 'us-east-1'
+            }
+
+            // IAM Role
+            env.AWS_ROLE_ARN = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
+            
+            // Get TENANT_ENV and TENANT_ID from customer json file
+            env.TENANT_ENV = sh(
+                script: "jq -r --arg env '${ENVIRONMENT}' '.[\\$env].tenant_env' resources/customer-mapping/${CUSTOMER}.json",
+                returnStdout: true
+            ).trim()
+
+            env.TENANT_ID = sh(
+                script: "jq -r --arg env '${ENVIRONMENT}' '.[\\$env].tenant_id' resources/customer-mapping/${CUSTOMER}.json",
+                returnStdout: true
+            ).trim()
+
+            // Logs
+            echo "Selected ENVIRONMENT: ${ENVIRONMENT}"
+            echo "Mapped AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID}"
+            echo "AWS_ROLE_ARN: ${AWS_ROLE_ARN}"
+            echo "AWS_REGION: ${AWS_REGION}"
+            echo "TENANT_ID: ${TENANT_ID}"
+            echo "TENANT_ENV: ${TENANT_ENV}"
         }
+    }
+}
        stage('Checkout App repo') {
     steps {
         script {
@@ -137,6 +163,78 @@ pipeline {
     }
 }
 
+
+stage('Build ECS Images') {
+    when {
+        expression { params.DEPLOY_ECS_SERVICES }
+    }
+    steps {
+        script {
+            sh """
+                set -e
+                cd bu-dgt-paymentor-core-aws-app
+
+                docker build -t agai-voice-processor:${BUILD_NUMBER} application/ecs/agai_voice_processor/
+                docker build -t agai-voice-assistant:${BUILD_NUMBER} application/ecs/agai_voice_assistant/
+                docker build -t agai-llm-engine:${BUILD_NUMBER} application/ecs/agai-llm-engine/
+            """
+        }
+    }
+}
+
+
+
+stage('Login to ECR') {
+    when {
+        expression { params.DEPLOY_ECS_SERVICES }
+    }
+    steps {
+        withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+            script {
+                sh """
+                    aws ecr get-login-password --region ${AWS_REGION} | \
+                    docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                """
+            }
+        }
+    }
+}
+
+
+stage('Tag ECS Images') {
+    when {
+        expression { params.DEPLOY_ECS_SERVICES }
+    }
+    steps {
+        script {
+            sh """
+                ECR=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+
+                docker tag agai-voice-processor:${BUILD_NUMBER} $ECR/agai-voice-processor:${BUILD_NUMBER}
+                docker tag agai-voice-assistant:${BUILD_NUMBER} $ECR/agai-voice-assistant:${BUILD_NUMBER}
+                docker tag agai-llm-engine:${BUILD_NUMBER} $ECR/agai-llm-engine:${BUILD_NUMBER}
+            """
+        }
+    }
+}
+
+stage('Push ECS Images') {
+    when {
+        expression { params.DEPLOY_ECS_SERVICES }
+    }
+    steps {
+        script {
+            sh """
+                ECR=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+
+                docker push $ECR/agai-voice-processor:${BUILD_NUMBER}
+                docker push $ECR/agai-voice-assistant:${BUILD_NUMBER}
+                docker push $ECR/agai-llm-engine:${BUILD_NUMBER}
+            """
+        }
+    }
+}
+
         stage('Build Java lambda') {
             when {
                 allOf {
@@ -169,7 +267,7 @@ pipeline {
                                 cd bu-dgt-paymentor-core-aws-app/cicd
                                 terraform init -upgrade -backend-config="bucket=${AWS_ACCOUNT_ID}-paymentor-tf-state-mgmt" -backend-config="key=${TENANT_ENV}/${TENANT_ID}/terraform.tfstate"
                                 terraform validate
-                                terraform plan -out=tfplan -var "customer_id=${TENANT_ID}" -var "env_id=${TENANT_ENV}" -var "target_env=${ENVIRONMENT}" -var-file="tfvars/${ENVIRONMENT}.tfvars"
+                                terraform plan -out=tfplan -var "customer_id=${TENANT_ID}" -var "image_tag=${BUILD_NUMBER}" -var "env_id=${TENANT_ENV}" -var "target_env=${ENVIRONMENT}" -var-file="tfvars/${ENVIRONMENT}.tfvars"
                             """
                         }
                     }
@@ -187,7 +285,27 @@ pipeline {
                 echo "Deployment approved by ${env.BUILD_USER_ID}."
             }
         }
-      
+        // stage('Prod Protection') {
+        //     when {
+        //         expression { params.ENVIRONMENT == "prod" }
+        //     }
+        //     input {
+        //         id 'ProductionApproval'
+        //         message 'WARNING: You are about to deploy to PRODUCTION! This cannot be undone. Do you want to proceed?'
+        //         ok 'Yes, Deploy to Production'
+        //         submitterParameter 'approverId'
+        //         parameters {
+        //             booleanParam(name: 'CONFIRM_DEPLOY', defaultValue: false, description: 'Check this box to confirm deployment to production')
+        //         }
+        //     }
+        //     steps {
+        //         script {
+        //             if (env.CONFIRM_DEPLOY != "true") {
+        //                 error "❌ Deployment aborted: CONFIRM_DEPLOY is not set to 'true'."
+        //             }
+        //         }
+        //     }
+        // }
         stage('terraform apply') {
             steps {
                 withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
@@ -293,7 +411,3 @@ pipeline {
         }
     }
 }
-
-
-here's my current jenkins file, 
-Let's add those stages,.  and let's also make sure that we are only running them optionally since they wont be enabled for all the tenants
