@@ -1,171 +1,306 @@
-import boto3
+import socket
+import time
 import json
-import logging
 import os
-import random
-import shutil
-import string
-import subprocess
+from datetime import datetime, timezone
 
-from aws_xray_sdk.core import patch_all
-from botocore.exceptions import ClientError
+ARTIFACT_DIR = "/tmp/network-cli-results"
+os.makedirs(ARTIFACT_DIR, exist_ok=True)
 
-patch_all()
+def write_file(filename: str, content: str):
+    path = os.path.join(ARTIFACT_DIR, filename)
+    with open(path, "a") as f:
+        f.write(content + "\n")
+
+def dns_lookup(host: str):
+    result = {
+        "host": host,
+        "canonical_name": None,
+        "addresses": [],
+        "error": None
+    }
+
+    try:
+        cname, aliases, addresses = socket.gethostbyname_ex(host)
+        result["canonical_name"] = cname
+        result["addresses"] = addresses
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
 
 
-logger = logging.getLogger()
-logger.setLevel(os.environ.get('log_level', 'INFO'))
+def tcp_connectivity_check(host: str, port: int, timeout_sec: int = 5):
+    result = {
+        "host": host,
+        "port": port,
+        "timeout_sec": timeout_sec,
+        "success": False,
+        "connect_time_ms": None,
+        "error": None
+    }
 
-region_name = os.environ['region_name']
-migrations_s3_bucket = os.environ['migrations_s3_bucket']
-migrations_s3_prefix = os.environ['migrations_s3_prefix']
-placeholder_secrets_dict = json.loads(os.environ["placeholder_secrets"])
-kms_key_id = os.environ['kms_key_id']
-rds_creds_secret_name = os.environ['secret_name']
-aws_account_id = os.environ['aws_account_id']
+    start = time.time()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout_sec)
 
-s3_client = boto3.client('s3')
-lambda_client = boto3.client('lambda')
-secrets_manager = boto3.client('secretsmanager', region_name=region_name)
+    try:
+        sock.connect((host, port))
+        end = time.time()
+        result["success"] = True
+        result["connect_time_ms"] = int((end - start) * 1000)
 
-try:
-    response = lambda_client.list_tags(
-        Resource=f"arn:aws:lambda:{region_name}:{aws_account_id}:function:{os.environ['AWS_LAMBDA_FUNCTION_NAME']}"
-    )
-    tags = response.get('Tags', {})
-    secrets_manager_tags = [{'Key': k, 'Value': v} for k, v in tags.items()]
-except Exception:
-    logger.error(f"Failed to fetch tags for the function")
-    raise
+    except Exception as e:
+        end = time.time()
+        result["error"] = str(e)
+        result["connect_time_ms"] = int((end - start) * 1000)
 
-secret_dict = json.loads(secrets_manager.get_secret_value(SecretId=rds_creds_secret_name)['SecretString'])
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
 
-host = secret_dict['host']
-database = secret_dict['database']
-password = secret_dict['password']
-port = secret_dict['port']
-user = secret_dict['username']
-cypher_key = secret_dict['cypher_key']
-
-pw_characters = string.ascii_letters + string.digits
+    return result
 
 
 def lambda_handler(event, context):
-    # Flyway executable in lambda layer
-    flyway_exe = "/opt/bin/flyway"
-    flyway_url = f"jdbc:postgresql://{host}:{port}/{database}"
-    migrations_folder = "/tmp/migrations"
+    """
+    Expected event:
+    {
+      "target_host": "mfttisa.td.com",
+      "target_port": 10022,
+      "timeout_sec": 5
+    }
+    """
 
-    try:
-        command = event.get('command')
-        baseline_version = event.get('baselineVersion')
+    target_host = event.get("target_host")
+    target_port = int(event.get("target_port", 10022))
+    timeout_sec = int(event.get("timeout_sec", 5))
 
-        if command:
-            logger.info("Running lambda event Flyway command")
-            event_command_list = command.split()
-            command_list = [flyway_exe, f"-url={flyway_url}", f"-user={user}", f"-password={password}"]
-            command_list.extend(event_command_list)
-            command_result = subprocess.run(command_list, capture_output=True, text=True, check=True)
-            logger.info(f"lambda event Flyway command output: {command_result.stdout}")
+    if not target_host:
+        return {
+            "status": "ERROR",
+            "message": "target_host is required"
+        }
 
-            return {
-                'statusCode': 200,
-                'body': command_result.stdout
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    header = [
+        "========================================",
+        "Network CLI Validation (Lambda)",
+        f"Timestamp (UTC): {timestamp}",
+        f"Host: {target_host}",
+        f"Port: {target_port}",
+        "========================================"
+    ]
+
+    # --- DNS lookup ---
+    dns_result = dns_lookup(target_host)
+
+    write_file("nslookup.out", "\n".join(header))
+    write_file("nslookup.out", "DNS Lookup Result:")
+    write_file("nslookup.out", json.dumps(dns_result, indent=2))
+
+    # --- TCP connectivity ---
+    conn_result = tcp_connectivity_check(
+        target_host,
+        target_port,
+        timeout_sec=timeout_sec
+    )
+
+    write_file("connectivity.out", "\n".join(header))
+    write_file("connectivity.out", "Port Connectivity Result:")
+    write_file("connectivity.out", json.dumps(conn_result, indent=2))
+
+    # --- Final response ---
+    response = {
+        "status": "SUCCESS" if conn_result["success"] else "FAILURE",
+        "timestamp": timestamp,
+        "dns": dns_result,
+        "connectivity": conn_result,
+        "lambda": {
+            "function_name": context.function_name,
+            "aws_request_id": context.aws_request_id
+        }
+    }
+
+    return response
+
+
+for this lambda, I need to test one more command:
+
+telnet agenticai-lfs-dev-voiceassistant.wittyriver-10f7eba4.australiaeast.azurecontainerapps.io 443
+
+
+can we please add this
+
+agenticai-lfs-dev-voiceassistant.wittyriver-10f7eba4.australiaeast.azurecontainerapps.io 443
+
+this can come from build with params
+
+we already have a host and port parameter in jenkins pipeline:
+
+properties([
+    parameters([
+        choice(name: 'CUSTOMER', choices: ['demo', 'lcc', 'fdr', 'nrg', 'nrgr', 'tdb', 'hsbcinm', 'hsbcmyh', 'sce', 'mf','pra', 'mbac', 'bcs', 'omf', 'lfs', 'clientdemo'], description: 'Which Customer do you want to deploy'),
+        choice(name: 'ENVIRONMENT', choices: ['dev','uat','prod'], description: 'Which Environment you want to deploy to'),
+        booleanParam(name: 'RUN_CLI_SCRIPT', defaultValue: false, description: 'Run CLI network validation'),
+        string(name: 'TARGET_HOST', defaultValue: 'mfttisa.td.com', description: 'Target hostname for network validation'),
+        string(name: 'TARGET_PORT', defaultValue: '10022', description: 'Target port for connectivity check')
+    ])
+])
+
+pipeline {
+    agent {
+        label 'cicd'
+    }
+
+    environment {
+        CUSTOMER        = "${params.CUSTOMER}"
+        ENVIRONMENT     = "${params.ENVIRONMENT}"
+        TARGET_HOST     = "${params.TARGET_HOST}"
+        TARGET_PORT     = "${params.TARGET_PORT}"
+        GIT_REPO_URL    = "https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-dgt-paymentor-core-aws-app.git"
+        OIDC_ROLE_NAME  = "paymentor-oidc-role"
+    }
+
+    stages {
+
+        stage('Auth Check') {
+            when {
+                expression { "${ENVIRONMENT}" != "dev" }
             }
-
-        if baseline_version:
-            logger.info(f"Setting baseline version to {baseline_version}")
-            baseline_command_list = [flyway_exe, "-defaultSchema=flyway", f"-url={flyway_url}", f"-user={user}", f"-password={password}", f"-baselineVersion={baseline_version}", "baseline"]
-            logger.info("Running Flyway baseline command")
-            baseline_result = subprocess.run(baseline_command_list, capture_output=True, text=True, check=True)
-            logger.info(f"Flyway baseline output: {baseline_result.stdout}")
-
-
-        placeholder_password_list = get_placeholder_password_list(placeholder_secrets_dict)
-
-        # Run Flyway migrate
-        download_migrations(migrations_s3_bucket, migrations_s3_prefix, migrations_folder)
-        logger.info("Running Flyway migrate command")
-        migrate_command_list = [flyway_exe, f"-locations=filesystem:{migrations_folder}", "-defaultSchema=flyway", f"-url={flyway_url}", f"-user={user}", f"-password={password}"]
-        migrate_command_list.extend(placeholder_password_list)
-        migrate_command_list.append("migrate")
-        migrate_result = subprocess.run(migrate_command_list, capture_output=True, text=True, check=True)
-        logger.info(f"Flyway migrate output: {migrate_result.stdout}")
-
-        return {
-            'statusCode': 200,
-            'body': migrate_result.stdout
+            steps {
+                sh """
+                    chmod +x scripts/env-protection.sh
+                    ./scripts/env-protection.sh deploy
+                """
+            }
         }
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Subprocess error while running Flyway command: {e.stderr}")
-        return {
-            'statusCode': 500,
-            'body': e.stderr
-        }
-    except Exception as e:
-        logger.exception("Error during attempt to run Flyway command")
-        return {
-            'statusCode': 500,
-            'body': str(e)
-        }
-    finally:
-        if os.path.exists(migrations_folder):
-            shutil.rmtree(migrations_folder)
 
+        stage('Get customer mapping') {
+            steps {
+                script {
+                    currentBuild.description = """CUSTOMER: ${CUSTOMER}
+ENVIRONMENT: ${ENVIRONMENT}
+BUILT BY: ${env.BUILD_USER_ID}"""
 
-def generate_password():
-    password_length = 8
-    return ''.join(random.choices(pw_characters, k=password_length))
+                    def envAccountMap = [
+                        dev:  '607436280417',
+                        uat:  '658960620175',
+                        prod: '016795361898'
+                    ]
 
+                    def envAccountMapLFS = [
+                        dev:  '116981803571',
+                        uat:  '216989139664',
+                        prod: '767828744639'
+                    ]
 
-def download_migrations(s3_bucket: str, s3_prefix:str, local_path:str) -> None:
-    try:
-        logger.info(f"Creating {local_path} folder to store migrations")
-        os.makedirs(local_path, exist_ok=True)
-        logger.info("Downloading migrations from s3")
-        response = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix)
-        files = [content['Key'] for content in response.get('Contents', []) if content['Key'].endswith('.sql')]
+                    def envAccountMapHSBC = [
+                        dev:  '088082905288',
+                        uat:  '793586321398',
+                        prod: '501957928506'
+                    ]
 
-        for file_key in files:
-            file_name = file_key.split('/')[-1]
-            s3_client.download_file(s3_bucket, file_key,
-                             os.path.join(local_path, file_name))
+                    def selectedMap =
+                        (CUSTOMER == 'lfs') ? envAccountMapLFS :
+                        (CUSTOMER in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
+                        envAccountMap
 
-        logger.info(f"Downloaded {files} from s3 to {local_path}")
-    except Exception:
-        logger.exception("Failed to download migrations from s3")
-        raise
+                    env.AWS_ACCOUNT_ID = selectedMap[ENVIRONMENT]
+                    env.AWS_ROLE_ARN  = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
 
-def get_placeholder_password_list(placeholder_secrets_dict):
-    placeholder_password_list = []
-    for placeholder, secret_name in placeholder_secrets_dict.items():
-        try:
-            db_user_secret = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)['SecretString'])
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                logger.info(f"Secret {secret_name} not found. Creating secret")
-                user_password = generate_password()
-                username = secret_name.rsplit('/', 1)[-1]
-                secret_string = {
-                    "dbname": database,
-                    "host": host,
-                    "key": cypher_key,
-                    "password": user_password,
-                    "port": port,
-                    "username": username
+                    env.TENANT_ENV = sh(
+                        script: "jq -r --arg env '${ENVIRONMENT}' '.[\$env].tenant_env' resources/customer-mapping/${CUSTOMER}.json",
+                        returnStdout: true
+                    ).trim()
+
+                    env.TENANT_ID = sh(
+                        script: "jq -r --arg env '${ENVIRONMENT}' '.[\$env].tenant_id' resources/customer-mapping/${CUSTOMER}.json",
+                        returnStdout: true
+                    ).trim()
+
+                    echo "AWS_ACCOUNT_ID : ${AWS_ACCOUNT_ID}"
+                    echo "AWS_ROLE_ARN  : ${AWS_ROLE_ARN}"
+                    echo "TENANT_ID     : ${TENANT_ID}"
+                    echo "TENANT_ENV    : ${TENANT_ENV}"
                 }
-                secrets_manager.create_secret(
-                    Name=secret_name,
-                    SecretString=json.dumps(secret_string),
-                    KmsKeyId=kms_key_id,
-                    Tags=secrets_manager_tags
-                )
-            else:
-                raise
-        else:
-            logger.info(f"Secret {secret_name} already exists")
-            user_password = db_user_secret['password']
+            }
+        }
 
-        placeholder_password_list.append(f"-placeholders.{placeholder}={user_password}")
+        stage('Checkout App repo') {
+            steps {
+                sh """
+                    git clone ${GIT_REPO_URL}
+                    cd bu-dgt-paymentor-core-aws-app
+                    git checkout client/${CUSTOMER}/${ENVIRONMENT}
+                """
+            }
+        }
 
-    return placeholder_password_list
+        stage('Network CLI Validation') {
+            when {
+                expression {
+                    return params.RUN_CLI_SCRIPT &&
+                           ['clientdemo','tdb','demo','lcc','nrg','nrgr','hsbcinm','hsbcmyh'].contains(params.CUSTOMER)
+                }
+            }
+            steps {
+                ansiColor('xterm') {
+                    sh '''
+                        set +e
+
+                        ARTIFACT_DIR="network-cli-results"
+                        mkdir -p $ARTIFACT_DIR
+
+                        echo "========================================" | tee $ARTIFACT_DIR/nslookup.out
+                        echo "DNS Lookup"                               | tee -a $ARTIFACT_DIR/nslookup.out
+                        echo "Host: ${TARGET_HOST}"                    | tee -a $ARTIFACT_DIR/nslookup.out
+                        echo "Timestamp: $(date -u)"                  | tee -a $ARTIFACT_DIR/nslookup.out
+                        echo "========================================" | tee -a $ARTIFACT_DIR/nslookup.out
+                        nslookup ${TARGET_HOST}                       | tee -a $ARTIFACT_DIR/nslookup.out
+
+                        echo ""                                       | tee $ARTIFACT_DIR/connectivity.out
+                        echo "========================================" | tee -a $ARTIFACT_DIR/connectivity.out
+                        echo "Port Connectivity Check"                 | tee -a $ARTIFACT_DIR/connectivity.out
+                        echo "Host: ${TARGET_HOST}"                    | tee -a $ARTIFACT_DIR/connectivity.out
+                        echo "Port: ${TARGET_PORT}"                    | tee -a $ARTIFACT_DIR/connectivity.out
+                        echo "Timestamp: $(date -u)"                  | tee -a $ARTIFACT_DIR/connectivity.out
+                        echo "========================================" | tee -a $ARTIFACT_DIR/connectivity.out
+
+                        timeout 5 bash -c "</dev/tcp/${TARGET_HOST}/${TARGET_PORT}"
+                        RESULT=$?
+
+                        if [ $RESULT -eq 0 ]; then
+                            echo "SUCCESS: Connectivity successful"    | tee -a $ARTIFACT_DIR/connectivity.out
+                        else
+                            echo "FAILURE: Connectivity failed"        | tee -a $ARTIFACT_DIR/connectivity.out
+                            # Uncomment below to FAIL pipeline
+                            # exit 1
+                        fi
+
+                        echo "Network CLI validation completed"
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'network-cli-results/**', fingerprint: true
+                }
+            }
+        }
+
+        // ---- Deployment stages go below ----
+    }
+
+    post {
+        cleanup {
+            deleteDir()
+        }
+    }
+}
+
+
