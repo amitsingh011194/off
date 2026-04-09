@@ -11,7 +11,11 @@ properties([
         defaultValue: false,
         description: 'Its not applicable for any tenant currently, please do not select it, Its only for DevOps testing at this moment'
         ),
-        string(name: 'IMAGE_TAG', defaultValue: '4702', description: 'Its not applicable for any tenant currently, please do not select it, Its only for DevOps testing at this moment')
+        string(
+        name: 'IMAGE_TAG',
+        defaultValue: '',
+        description: 'Its not applicable for any tenant currently, please do not select it, Its only for DevOps testing at this moment'
+       )
         
     ])
 ])
@@ -117,6 +121,16 @@ env.TENANT_ID = sh(
     """,
     returnStdout: true
 ).trim()
+
+            script {
+    env.IMAGE_TAG_FINAL = params.IMAGE_TAG?.trim()
+
+    if (!env.IMAGE_TAG_FINAL) {
+        env.IMAGE_TAG_FINAL = env.BUILD_NUMBER
+    }
+
+    echo "Final IMAGE TAG: ${env.IMAGE_TAG_FINAL}"
+}
 
             // Logs
             echo "Selected ENVIRONMENT: ${ENVIRONMENT}"
@@ -268,7 +282,7 @@ stage('ECS Build & Push') {
 
                         terraform plan -out=tfplan \
                           -var "customer_id=${TENANT_ID}" \
-                          -var "image_tag=${imageTag}" \
+                          -var "image_tag=${IMAGE_TAG_FINAL}" \
                           -var "env_id=${TENANT_ENV}" \
                           -var "target_env=${ENVIRONMENT}" \
                           -var-file="tfvars/${ENVIRONMENT}.tfvars"
@@ -322,7 +336,7 @@ stage('ECS Build & Push') {
                         cd bu-dgt-paymentor-core-aws-app/cicd
                         terraform apply -input=false -auto-approve \
                           -var "customer_id=${TENANT_ID}" \
-                          -var "image_tag=${imageTag}" \
+                          -var "image_tag=${IMAGE_TAG_FINAL}" \
                           -var "env_id=${TENANT_ENV}" \
                           -var "target_env=${ENVIRONMENT}" \
                           -var-file="tfvars/${ENVIRONMENT}.tfvars"
