@@ -1,68 +1,168 @@
-import boto3
-import os
-from datetime import date
+properties([
+  parameters([
+    choice(name: 'CUSTOMER', choices: ['bcs', 'lcc', 'fdr', 'nrg', 'demo', 'tdb', 'hsbcinm', 'hsbcmyh', 'sce', 'mf','pra', 'mbac', 'nrgr', 'omf', 'lfs', 'clientdemo'], description: 'Customer'),
+    choice(name: 'ENVIRONMENT', choices: ['dev','uat','prod'], description: 'Environment'),
+    string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS region')
+  ])
+])
 
-ce = boto3.client('ce')
-sns = boto3.client('sns')
+pipeline {
+  agent { label 'cicd' }
 
-# ✅ Read from environment variables
-LIMIT = float(os.environ.get("LIMIT", 1000))  # default fallback
-THRESHOLD = float(os.environ.get("THRESHOLD", 70))  # default fallback
-SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
+  environment {
+    CUSTOMER        = "${params.CUSTOMER}"
+    ENVIRONMENT     = "${params.ENVIRONMENT}"
+    AWS_REGION      = "${params.AWS_REGION}"
+    OIDC_ROLE_NAME  = "paymentor-oidc-role"
+  }
 
+  stages {
 
-def lambda_handler(event, context):
-    try:
-        start = date.today().replace(day=1).strftime('%Y-%m-%d')
-        end = date.today().strftime('%Y-%m-%d')
+    stage('Get AWS Account Mapping') {
+      steps {
+        script {
+          def envAccountMap = [
+            dev:  '607436280417',
+            uat:  '658960620175',
+            prod: '016795361898'
+          ]
 
-        print(f"Fetching cost from {start} to {end}")
+          def envAccountMapLFS = [
+            dev:  '116981803571',
+            uat:  '216989139664',
+            prod: '767828744639'
+          ]
 
-     response = ce.get_cost_and_usage(
-    TimePeriod={'Start': start, 'End': end},
-    Granularity='MONTHLY',
-    Metrics=['UnblendedCost'],
-    GroupBy=[
-        {'Type': 'DIMENSION', 'Key': 'SERVICE'}
-    ]
-)
+          def envAccountMapHSBC = [
+            dev:  '088082905288',
+            uat:  '793586321398',
+            prod: '501957928506'
+          ]
 
-        amount = float(response['ResultsByTime'][0]['Total']['UnblendedCost']['Amount'])
-        percent = (amount / LIMIT) * 100
+          def selectedMap =
+            (CUSTOMER == 'lfs') ? envAccountMapLFS :
+            (CUSTOMER in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
+            envAccountMap
 
-        print(f"Current Spend: ${amount}")
-        print(f"Usage: {percent:.2f}% of ${LIMIT}")
+          env.AWS_ACCOUNT_ID = selectedMap[ENVIRONMENT]
+          env.AWS_ROLE_ARN   = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
 
-        # 🚨 Threshold check
-        if percent >= THRESHOLD:
-            print("Threshold exceeded!")
+          // Lambda name (must match Terraform-created one OR adjust if needed)
+          env.LAMBDA_NAME = "sb-prod3-3878909f-service_limit_lambdas"
 
-            if SNS_TOPIC_ARN:
-                message = (
-                    f"🚨 SMS Cost Alert 🚨\n\n"
-                    f"Current Spend: ${amount:.2f}\n"
-                    f"Usage: {percent:.2f}%\n"
-                    f"Threshold: {THRESHOLD}%\n"
-                )
-
-                sns.publish(
-                    TopicArn=SNS_TOPIC_ARN,
-                    Subject="SMS Cost Alert",
-                    Message=message
-                )
-
-                print("SNS notification sent")
-            else:
-                print("SNS_TOPIC_ARN not configured!")
-
-        return {
-            "statusCode": 200,
-            "body": {
-                "spend": amount,
-                "usage_percent": round(percent, 2)
-            }
+          echo "AWS_ACCOUNT_ID : ${AWS_ACCOUNT_ID}"
+          echo "AWS_ROLE_ARN   : ${AWS_ROLE_ARN}"
+          echo "LAMBDA_NAME    : ${LAMBDA_NAME}"
         }
+      }
+    }
 
-    except Exception as e:
-        print(f"Error occurred: {str(e)}")
-        raise
+stage('Invoke Lambda & Fetch Logs') {
+  steps {
+    withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+      script {
+        sh '''
+          set -e
+
+          FUNCTION_NAME=${LAMBDA_NAME}
+
+          echo "Invoking Lambda: $FUNCTION_NAME"
+
+          # Invoke Lambda and capture response + logs
+          aws lambda invoke \
+            --function-name $FUNCTION_NAME \
+            --region $AWS_REGION \
+            --log-type Tail \
+            output.json > lambda_output.txt
+
+          echo "Lambda invocation completed"
+
+          echo "========================================"
+          echo "📦 Lambda Response:"
+          cat output.json
+          echo ""
+
+          echo "========================================"
+          echo "📜 Lambda Logs (Decoded):"
+
+          # Extract and decode logs
+          LOG_RESULT=$(cat lambda_output.txt | jq -r '.LogResult')
+
+          if [ "$LOG_RESULT" != "null" ]; then
+            echo $LOG_RESULT | base64 --decode
+          else
+            echo "No logs returned"
+          fi
+
+          echo "========================================"
+        '''
+      }
+    }
+  }
+}
+stage('Send Cost Alert Email') {
+  steps {
+    script {
+      // Read Lambda output
+      def response = readJSON file: 'output.json'
+      def body = response.body
+
+      def tenant = body.tenant
+      def totalSpend = body.total_spend
+      def usage = body.usage_percent
+      def services = body.services
+
+      // Build service breakdown HTML
+      def serviceTable = ""
+      services.each { key, value ->
+        serviceTable += "<tr><td>${key}</td><td>$${value}</td></tr>"
+      }
+
+      def emailBody = """
+        <h2>📊 SMS Cost Monitoring Report</h2>
+
+        <p><b>Tenant:</b> ${tenant}</p>
+        <p><b>Total Spend:</b> $${totalSpend}</p>
+        <p><b>Usage:</b> ${usage}%</p>
+
+        <h3>Service Breakdown</h3>
+        <table border="1" cellpadding="5" cellspacing="0">
+          <tr>
+            <th>Service</th>
+            <th>Cost (USD)</th>
+          </tr>
+          ${serviceTable}
+        </table>
+
+        <br/>
+        <p><i>Generated from Jenkins Pipeline</i></p>
+      """
+
+      // 🚨 Send only if threshold exceeded
+      if (usage >= 70) {
+        emailext(
+          to: "${env.EMAIL_RECIPIENTS}",
+          subject: "🚨 SMS Cost Alert - ${tenant}",
+          body: emailBody,
+          mimeType: 'text/html'
+        )
+      } else {
+        echo "Usage below threshold (${usage}%). Email not sent."
+      }
+    }
+  }
+}
+
+ 
+
+  }
+
+  post {
+    always {
+      echo "Pipeline execution completed"
+      deleteDir()
+    }
+  }
+}
+
+This is how the jenkins file looks like now
