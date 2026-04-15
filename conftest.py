@@ -1,178 +1,231 @@
-Breadcrumbsbu-digital-paymentor-core-app/devops_handled_lambdas/service_limit_lambdas
-/lambda_function.py
-Go to file
-t
-Latest commit
-amit253714
-amit253714
-Update lambda_function.py
-05c1147
- · 
-2 days ago
-History
-Breadcrumbsbu-digital-paymentor-core-app/devops_handled_lambdas/service_limit_lambdas
-/lambda_function.py
-File metadata and controls
-
-Code
-
-Blame
-135 lines (112 loc) · 4.05 KB
-import boto3
-import os
-from datetime import date
-
-ce = boto3.client('ce')
-sns = boto3.client('sns')
-
-LIMIT = float(os.environ.get("LIMIT", 1000))
-THRESHOLD = float(os.environ.get("THRESHOLD", 70))
-SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
-
-TAG_KEY = "sb:cost:tenant"
-TENANT_ID = os.environ.get("TENANT_ID")
-
-
-def lambda_handler(event, context):
-    try:
-        if not TENANT_ID:
-            raise ValueError("TENANT_ID is not set")
-
-        start = date.today().replace(day=1).strftime('%Y-%m-%d')
-        end = date.today().strftime('%Y-%m-%d')
-
-        print(f"Fetching cost for tenant: {TENANT_ID}")
-
-        # -----------------------------
-        # 1️⃣ TOTAL COST (Overview)
-        # -----------------------------
-        total_response = ce.get_cost_and_usage(
-            TimePeriod={'Start': start, 'End': end},
-            Granularity='MONTHLY',
-            Metrics=['UnblendedCost'],
-            Filter={
-                "And": [
-                    {
-                        "Dimensions": {
-                            "Key": "SERVICE",
-                            "Values": ["AWS End User Messaging"]
-                        }
-                    },
-                    {
-                        "Tags": {
-                            "Key": TAG_KEY,
-                            "Values": [TENANT_ID]
-                        }
-                    }
-                ]
-            }
-        )
-
-        total_amount = float(
-            total_response['ResultsByTime'][0]['Total']['UnblendedCost']['Amount']
-        )
-
-        percent = (total_amount / LIMIT) * 100 if LIMIT > 0 else 0
-
-        # -----------------------------
-        # 2️⃣ SERVICE-WISE BREAKDOWN
-        # -----------------------------
-        service_response = ce.get_cost_and_usage(
-            TimePeriod={'Start': start, 'End': end},
-            Granularity='MONTHLY',
-            Metrics=['UnblendedCost'],
-            GroupBy=[
-                {"Type": "DIMENSION", "Key": "SERVICE"}
-            ],
-            Filter={
-                "Tags": {
-                    "Key": TAG_KEY,
-                    "Values": [TENANT_ID]
-                }
-            }
-        )
-
-        service_costs = {}
-
-        for group in service_response['ResultsByTime'][0]['Groups']:
-            service_name = group['Keys'][0]
-            cost = float(group['Metrics']['UnblendedCost']['Amount'])
-
-            if cost > 0:
-                service_costs[service_name] = round(cost, 2)
-
-        # -----------------------------
-        # 📊 Print Summary
-        # -----------------------------
-        print(f"\n=== TENANT SUMMARY ===")
-        print(f"Tenant: {TENANT_ID}")
-        print(f"Total Spend: ${round(total_amount, 2)}")
-        print(f"Usage: {percent:.2f}% of ${LIMIT}")
-
-        print("\n=== SERVICE BREAKDOWN ===")
-        for svc, cost in service_costs.items():
-            print(f"{svc} → ${cost}")
-
-        # -----------------------------
-        # 🚨 ALERT
-        # -----------------------------
-        if percent >= THRESHOLD:
-            print("Threshold exceeded!")
-
-            if SNS_TOPIC_ARN:
-                breakdown_text = "\n".join(
-                    [f"{k}: ${v}" for k, v in service_costs.items()]
-                )
-
-                message = (
-                    f"🚨 SMS Cost Alert 🚨\n\n"
-                    f"Tenant: {TENANT_ID}\n"
-                    f"Total Spend: ${round(total_amount, 2)}\n"
-                    f"Usage: {percent:.2f}%\n\n"
-                    f"Service Breakdown:\n{breakdown_text}"
-                )
-
-                sns.publish(
-                    TopicArn=SNS_TOPIC_ARN,
-                    Subject=f"{TENANT_ID} Cost Alert",
-                    Message=message
-                )
-
-                print("SNS notification sent")
-
-        return {
-            "statusCode": 200,
-            "body": {
-                "tenant": TENANT_ID,
-                "total_spend": round(total_amount, 2),
-                "usage_percent": round(percent, 2),
-                "service_breakdown": service_costs
-            }
+properties([
+  parameters([
+    choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','mf','pra','mbac','nrgr','omf','lfs','clientdemo']),
+    choice(name: 'ENVIRONMENT', choices: ['prod','uat','dev']),
+    string(name: 'AWS_REGION', defaultValue: 'us-east-1')
+  ])
+])
+ 
+pipeline {
+  agent { label 'cicd' }
+ 
+  environment {
+    OIDC_ROLE_NAME   = "paymentor-oidc-role"
+    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com"
+  }
+ 
+  stages {
+ 
+    stage('Get AWS Account Mapping') {
+      steps {
+        script {
+          def envAccountMap = [
+            dev:  '607436280417',
+            uat:  '658960620175',
+            prod: '016795361898'
+          ]
+ 
+          def envAccountMapLFS = [
+            dev:  '116981803571',
+            uat:  '216989139664',
+            prod: '767828744639'
+          ]
+ 
+          def envAccountMapHSBC = [
+            dev:  '088082905288',
+            uat:  '793586321398',
+            prod: '501957928506'
+          ]
+ 
+          def selectedMap =
+            (CUSTOMER == 'lfs') ? envAccountMapLFS :
+            (CUSTOMER in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
+            envAccountMap
+ 
+          env.AWS_ACCOUNT_ID = selectedMap[ENVIRONMENT]
+          env.AWS_ROLE_ARN   = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
+ 
+          // Lambda name (must match Terraform-created one OR adjust if needed)
+          env.LAMBDA_NAME = "sb-prod3-3878909f-service_limit_lambdas"
+ 
+          echo "AWS_ACCOUNT_ID : ${AWS_ACCOUNT_ID}"
+          echo "AWS_ROLE_ARN   : ${AWS_ROLE_ARN}"
+          echo "LAMBDA_NAME    : ${LAMBDA_NAME}"
         }
+      }
+    }
+ 
+stage('Invoke Lambda & Fetch Logs') {
+  steps {
+    withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+      script {
+        sh '''
+          set -e
+ 
+          FUNCTION_NAME=${LAMBDA_NAME}
+ 
+          echo "Invoking Lambda: $FUNCTION_NAME"
+ 
+          aws lambda invoke \
+            --function-name $FUNCTION_NAME \
+            --region $AWS_REGION \
+            --log-type Tail \
+            output.json > lambda_output.txt
+ 
+          echo "Lambda invocation completed"
+ 
+          echo "========================================"
+          echo "📦 Lambda Response:"
+          cat output.json
+          echo ""
+ 
+          echo "========================================"
+          echo "📜 Lambda Logs (Decoded):"
+ 
+          LOG_RESULT=$(cat lambda_output.txt | jq -r '.LogResult')
+ 
+          if [ "$LOG_RESULT" != "null" ]; then
+            echo $LOG_RESULT | base64 --decode | tee decoded_logs.txt
+          else
+            echo "No logs returned"
+          fi
+ 
+          echo "========================================"
+        '''
+      }
+    }
+  }
+}
+ 
+stage('Resolve Tenant Mapping') {
+  steps {
+    script {
+ 
+      def customer = params.CUSTOMER?.toLowerCase()
+      def envName  = params.ENVIRONMENT?.toLowerCase()
+ 
+      def mappingFile = "resources/customer-mapping/${customer}.json"
+ 
+      if (!fileExists(mappingFile)) {
+        error "❌ Mapping file not found: ${mappingFile}"
+      }
+ 
+      def mapping = readJSON file: mappingFile
+ 
+      if (!mapping.containsKey(envName)) {
+        error "❌ Environment '${envName}' not found in ${mappingFile}"
+      }
+ 
+      def tenantShort = mapping[envName].tenant_id
+      def tenantEnv   = mapping[envName].tenant_env
+ 
+      // Store globally
+      env.CLIENT_NAME  = customer.toUpperCase()
+      env.ENV_NAME     = envName.toUpperCase()
+      env.TENANT_SHORT = tenantShort
+      env.TENANT_ENV   = tenantEnv
+ 
+      echo """
+      ✅ Mapping Resolved:
+      Client       : ${env.CLIENT_NAME}
+      Environment  : ${env.ENV_NAME}
+      Tenant Short : ${env.TENANT_SHORT}
+      Tenant Env   : ${env.TENANT_ENV}
+      """
+    }
+  }
+}
+ 
+ 
+stage('Send Cost Alert Email') {
+  steps {
+    script {
+ 
+      if (!fileExists('output.json')) {
+        error "Lambda output.json not found"
+      }
+ 
+      def lambdaResponse = readJSON file: 'output.json'
+ 
+      def body = [:]
+      if (lambdaResponse.body instanceof String) {
+        body = readJSON text: lambdaResponse.body
+      } else if (lambdaResponse.body instanceof Map) {
+        body = lambdaResponse.body
+      }
+ 
+      def tenant     = body.tenant ?: 'N/A'
+      def totalSpend = body.total_spend ?: 0
+      def usage      = body.usage_percent ?: 0
+ 
+      // 🔥 NEW: Parse logs
+      def serviceTable = ''
+      if (fileExists('decoded_logs.txt')) {
+ 
+        def lines = readFile('decoded_logs.txt').split('\n')
+ 
+        lines.each { line ->
+          if (line.contains('→ $')) {
+ 
+            def parts = line.split('→')
+            def service = parts[0].trim()
+            def cost = parts[1].replace('$','').trim()
+ 
+            def color = cost.toDouble() > 10 ? 'red' : (cost.toDouble() > 1 ? 'orange' : 'black')
+ 
+            serviceTable += """
+<tr>
+<td>${service}</td>
+<td><b style="color:${color}">${'$'}${cost}</b></td>
+</tr>
+            """
+          }
+        }
+      }
+ 
+      def emailBody = '''
+<h2 style="color:#2E86C1;">📊 SMS Cost Monitoring</h2>
+ 
+        <p><b>Tenant:</b> %TENANT%</p>
+<p><b>Total Spend:</b> <span style="color:red;">$%TOTAL%</span></p>
+<p><b>Usage:</b> %USAGE%%</p>
+ 
+        <h3>💰 Service Breakdown</h3>
+ 
+        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
+<tr style="background-color:#f2f2f2;">
+<th>Service</th>
+<th>Cost ($)</th>
+</tr>
+          %TABLE%
+</table>
+ 
+        <br/>
+<p><i>Generated from Jenkins Pipeline</i></p>
+      '''
+ 
+      emailBody = emailBody
+        .replace('%TENANT%', tenant.toString())
+        .replace('%TOTAL%', totalSpend.toString())
+        .replace('%USAGE%', usage.toString())
+        .replace('%TABLE%', serviceTable)
+ 
+     emailext(
+  to: env.EMAIL_RECIPIENTS,
+  subject: "📊 SMS Cost Report - ${env.TENANT_SHORT} | Client: ${env.CLIENT_NAME} | Environment: ${env.ENV_NAME}",
+  mimeType: 'text/html',
+  body: emailBody
+)
+    }
+  }
+}
+  }
+ 
+  post {
+    always {
+      deleteDir()
+    }
+  }
+}
 
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        raise
-
-
-
-we had created this lambda,  for tdb prod account but I think this one lambda can be used for all the tenants in the prod account because all of them are there in one account itself and catagorized by the tenant ID.
-we can just alter the payload that we provide to lambda dynamically.
-
-  I guess currently the lambda function is pretty generic already but ther main thing we are providibg the lambda is the tenant ID from the env variables:
-
- "TENANT_ID": "3878909f-e2f8-4588-b8fa-624da4b28450",
-
-
-so this thing, we can now provide to it dynamically from the jenkins pipeline while triggering..
-3878909f-e2f8-4588-b8fa-624da4b28450
-
-I know in the tenat ID, we usually have only this value: 3878909f
-
-but we somehow want to make the lambda act like this: 3878909f-*
-
-so basically, it shouldn't care what's in front of that value and it should bring the absolute value first and then filter.
-
-
-
-  
+what change would be needdeeded here now?
