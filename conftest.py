@@ -11,7 +11,7 @@ pipeline {
   agent { label 'cicd' }
 
   triggers {
-    cron('H H */7 * *')  // every 30 mins (for testing)
+    cron('H H */7 * *')   // your schedule (fix later if needed)
   }
 
   environment {
@@ -24,6 +24,9 @@ pipeline {
     stage('Process Tenants') {
       steps {
         script {
+
+          def FINAL_REPORT = ""
+          def GRAND_TOTAL = 0
 
           def envAccountMap = [
             dev:  '607436280417',
@@ -43,7 +46,6 @@ pipeline {
             prod: '501957928506'
           ]
 
-          // 🔹 All customers list
           def TARGETS = [
             [env: 'prod', customer: 'tdb'],
             [env: 'prod', customer: 'lcc'],
@@ -63,18 +65,8 @@ pipeline {
             [env: 'prod', customer: 'clientdemo']
           ]
 
-          // 🔹 Decide execution mode
-          def executionList = []
+          def executionList = params.RUN_ALL ? TARGETS : [[env: params.ENVIRONMENT, customer: params.CUSTOMER]]
 
-          if (params.RUN_ALL) {
-            echo "Running in FULL mode (cron)"
-            executionList = TARGETS
-          } else {
-            echo "Running in SINGLE mode (manual)"
-            executionList.add([env: params.ENVIRONMENT, customer: params.CUSTOMER])
-          }
-
-          // 🔁 Loop
           for (t in executionList) {
 
             def customer = t.customer
@@ -86,7 +78,6 @@ pipeline {
 
             try {
 
-              // 🔹 Resolve Mapping
               def mappingFile = "resources/customer-mapping/${customer}.json"
 
               if (!fileExists(mappingFile)) {
@@ -109,7 +100,6 @@ pipeline {
               env.TENANT_SHORT = tenantShort
               env.TENANT_ENV   = tenantEnv
 
-              // 🔹 Account mapping
               def selectedMap =
                 (customer == 'lfs') ? envAccountMapLFS :
                 (customer in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
@@ -119,42 +109,30 @@ pipeline {
               env.AWS_ROLE_ARN   = "arn:aws:iam::${env.AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
               env.LAMBDA_NAME    = "sb-prod3-3878909f-service_limit_lambdas"
 
-              // 🔹 Invoke Lambda
               withAWS(role: "${env.AWS_ROLE_ARN}", useNode: true) {
                 sh '''
                   set -e
 
                   echo "Invoking Lambda: ${LAMBDA_NAME}"
-                  echo "Tenant Prefix: ${TENANT_SHORT}"
-
                   printf '{"tenant_prefix":"%s"}' "${TENANT_SHORT}" > payload.json
 
                   aws lambda invoke \
-                  --function-name $LAMBDA_NAME \
-                  --region $AWS_REGION \
-                  --cli-binary-format raw-in-base64-out \
-                  --payload file://payload.json \
-                  --log-type Tail \
-                  output.json > lambda_output.txt
-
-                  echo "========================================"
-                  echo "📜 Lambda Logs (Decoded):"
+                    --function-name $LAMBDA_NAME \
+                    --region $AWS_REGION \
+                    --cli-binary-format raw-in-base64-out \
+                    --payload file://payload.json \
+                    --log-type Tail \
+                    output.json > lambda_output.txt
 
                   LOG_RESULT=$(cat lambda_output.txt | jq -r '.LogResult')
 
                   if [ "$LOG_RESULT" != "null" ]; then
-                    echo $LOG_RESULT | base64 --decode | tee decoded_logs.txt
-                  else
-                    echo "No logs returned"
+                    echo $LOG_RESULT | base64 --decode > decoded_logs.txt
                   fi
-
-                  echo "========================================"
                 '''
               }
 
-              // 🔹 Email Stage (unchanged)
               if (!fileExists('output.json')) {
-                echo "No output.json, skipping email"
                 continue
               }
 
@@ -163,17 +141,19 @@ pipeline {
               def body = [:]
               if (lambdaResponse.body instanceof String) {
                 body = readJSON text: lambdaResponse.body
-              } else if (lambdaResponse.body instanceof Map) {
+              } else {
                 body = lambdaResponse.body
               }
 
               def tenant = body.tenant ?: env.TENANT_SHORT
-              def totalSpend = body.total_spend ?: 0
+              def totalSpend = (body.total_spend ?: 0).toDouble()
               def usage      = body.usage_percent ?: 0
 
-              def serviceTable = ''
-              if (fileExists('decoded_logs.txt')) {
+              GRAND_TOTAL += totalSpend
 
+              def serviceTable = ""
+
+              if (fileExists('decoded_logs.txt')) {
                 def lines = readFile('decoded_logs.txt').split('\n')
 
                 lines.each { line ->
@@ -190,49 +170,49 @@ pipeline {
 <td>${service}</td>
 <td><b style="color:${color}">${'$'}${cost}</b></td>
 </tr>
-                    """
+"""
                   }
                 }
               }
 
-              def emailBody = '''
-<h2 style="color:#2E86C1;">📊 SMS Cost Monitoring</h2>
+              FINAL_REPORT += """
+<hr/>
+<h3>Tenant: ${tenant}</h3>
+<p><b>Client:</b> ${env.CLIENT_NAME}</p>
+<p><b>Environment:</b> ${env.ENV_NAME}</p>
+<p><b>Total Spend:</b> <span style="color:red;">$${totalSpend}</span></p>
+<p><b>Usage:</b> ${usage}%</p>
 
-<p><b>Tenant:</b> %TENANT%</p>
-<p><b>Total Spend:</b> <span style="color:red;">$%TOTAL%</span></p>
-<p><b>Usage:</b> %USAGE%%</p>
-
-<h3>💰 Service Breakdown</h3>
-
-<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
-<tr style="background-color:#f2f2f2;">
-<th>Service</th>
-<th>Cost ($)</th>
-</tr>
-%TABLE%
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>Service</th><th>Cost</th></tr>
+${serviceTable}
 </table>
-
-<br/>
-<p><i>Generated from Jenkins Pipeline</i></p>
-              '''
-
-              emailBody = emailBody
-                .replace('%TENANT%', tenant.toString())
-                .replace('%TOTAL%', totalSpend.toString())
-                .replace('%USAGE%', usage.toString())
-                .replace('%TABLE%', serviceTable)
-
-              emailext(
-                to: env.EMAIL_RECIPIENTS,
-                subject: "📊 SMS Cost Report - ${env.TENANT_SHORT} | Client: ${env.CLIENT_NAME} | Environment: ${env.ENV_NAME}",
-                mimeType: 'text/html',
-                body: emailBody
-              )
+"""
 
             } catch (err) {
-              echo "❌ Failed for ${customer} - ${envName}: ${err}"
+              echo "❌ Failed for ${customer}: ${err}"
             }
           }
+
+          // =========================
+          // SINGLE CONSOLIDATED EMAIL
+          // =========================
+
+          emailext(
+            to: env.EMAIL_RECIPIENTS,
+            subject: "📊 Consolidated Cost Report | ${new Date()}",
+            mimeType: 'text/html',
+            body: """
+<h2>📊 Multi-Tenant Cost Monitoring</h2>
+
+<p><b>Total Spend Across All Tenants:</b> 
+<span style="color:red;">$${String.format('%.2f', GRAND_TOTAL)}</span></p>
+
+${FINAL_REPORT}
+
+<br/><p><i>Generated from Jenkins Pipeline</i></p>
+"""
+          )
         }
       }
     }
