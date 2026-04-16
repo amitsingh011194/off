@@ -11,7 +11,7 @@ pipeline {
   agent { label 'cicd' }
 
   triggers {
-    cron('H H */7 * *')   // your schedule (fix later if needed)
+    cron('H H */7 * *')
   }
 
   environment {
@@ -26,7 +26,7 @@ pipeline {
         script {
 
           def FINAL_REPORT = ""
-          def GRAND_TOTAL = 0
+          def GRAND_TOTAL = 0.0
 
           def envAccountMap = [
             dev:  '607436280417',
@@ -72,64 +72,56 @@ pipeline {
             def customer = t.customer
             def envName  = t.env
 
-            echo "=================================="
             echo "Processing ${customer} - ${envName}"
-            echo "=================================="
 
             try {
 
               def mappingFile = "resources/customer-mapping/${customer}.json"
-
               if (!fileExists(mappingFile)) {
-                echo "❌ Mapping not found for ${customer}, skipping..."
+                echo "Mapping missing for ${customer}"
                 continue
               }
 
               def mapping = readJSON file: mappingFile
-
               if (!mapping.containsKey(envName)) {
-                echo "❌ Env not found in mapping, skipping..."
+                echo "Env missing for ${customer}"
                 continue
               }
 
               def tenantShort = mapping[envName].tenant_id
               def tenantEnv   = mapping[envName].tenant_env
 
-              env.CLIENT_NAME  = customer.toUpperCase()
-              env.ENV_NAME     = envName.toUpperCase()
-              env.TENANT_SHORT = tenantShort
-              env.TENANT_ENV   = tenantEnv
-
               def selectedMap =
                 (customer == 'lfs') ? envAccountMapLFS :
                 (customer in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
                 envAccountMap
 
-              env.AWS_ACCOUNT_ID = selectedMap[envName]
-              env.AWS_ROLE_ARN   = "arn:aws:iam::${env.AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
-              env.LAMBDA_NAME    = "sb-prod3-3878909f-service_limit_lambdas"
+              def accountId = selectedMap[envName]
+              def roleArn = "arn:aws:iam::${accountId}:role/${OIDC_ROLE_NAME}"
+              def lambdaName = "sb-prod3-3878909f-service_limit_lambdas"
 
-              withAWS(role: "${env.AWS_ROLE_ARN}", useNode: true) {
-                sh '''
+              withAWS(role: roleArn, useNode: true) {
+
+                sh """
                   set -e
 
-                  echo "Invoking Lambda: ${LAMBDA_NAME}"
-                  printf '{"tenant_prefix":"%s"}' "${TENANT_SHORT}" > payload.json
+                  echo "Invoking Lambda: ${lambdaName}"
+                  printf '{"tenant_prefix":"%s"}' "${tenantShort}" > payload.json
 
                   aws lambda invoke \
-                    --function-name $LAMBDA_NAME \
-                    --region $AWS_REGION \
+                    --function-name ${lambdaName} \
+                    --region ${AWS_REGION} \
                     --cli-binary-format raw-in-base64-out \
                     --payload file://payload.json \
                     --log-type Tail \
                     output.json > lambda_output.txt
 
-                  LOG_RESULT=$(cat lambda_output.txt | jq -r '.LogResult')
+                  LOG_RESULT=\$(cat lambda_output.txt | jq -r '.LogResult')
 
-                  if [ "$LOG_RESULT" != "null" ]; then
-                    echo $LOG_RESULT | base64 --decode > decoded_logs.txt
+                  if [ "\$LOG_RESULT" != "null" ]; then
+                    echo \$LOG_RESULT | base64 --decode > decoded_logs.txt
                   fi
-                '''
+                """
               }
 
               if (!fileExists('output.json')) {
@@ -138,22 +130,20 @@ pipeline {
 
               def lambdaResponse = readJSON file: 'output.json'
 
-              def body = [:]
-              if (lambdaResponse.body instanceof String) {
-                body = readJSON text: lambdaResponse.body
-              } else {
-                body = lambdaResponse.body
-              }
+              def body = (lambdaResponse.body instanceof String) ?
+                          readJSON(text: lambdaResponse.body) :
+                          lambdaResponse.body
 
-              def tenant = body.tenant ?: env.TENANT_SHORT
+              def tenant = body.tenant ?: tenantShort
               def totalSpend = (body.total_spend ?: 0).toDouble()
-              def usage      = body.usage_percent ?: 0
+              def usage = body.usage_percent ?: 0
 
               GRAND_TOTAL += totalSpend
 
               def serviceTable = ""
 
               if (fileExists('decoded_logs.txt')) {
+
                 def lines = readFile('decoded_logs.txt').split('\n')
 
                 lines.each { line ->
@@ -161,14 +151,18 @@ pipeline {
 
                     def parts = line.split('→')
                     def service = parts[0].trim()
-                    def cost = parts[1].replace('$','').trim()
+                    def costStr = parts[1].replace('$','').trim()
 
-                    def color = cost.toDouble() > 10 ? 'red' : (cost.toDouble() > 1 ? 'orange' : 'black')
+                    def cost = costStr.isNumber() ? costStr.toDouble() : 0.0
+
+                    def color =
+                      cost > 10 ? 'red' :
+                      cost > 1 ? 'orange' : 'black'
 
                     serviceTable += """
 <tr>
 <td>${service}</td>
-<td><b style="color:${color}">${'$'}${cost}</b></td>
+<td><b style="color:${color}">\$${cost}</b></td>
 </tr>
 """
                   }
@@ -178,9 +172,9 @@ pipeline {
               FINAL_REPORT += """
 <hr/>
 <h3>Tenant: ${tenant}</h3>
-<p><b>Client:</b> ${env.CLIENT_NAME}</p>
-<p><b>Environment:</b> ${env.ENV_NAME}</p>
-<p><b>Total Spend:</b> <span style="color:red;">$${totalSpend}</span></p>
+<p><b>Client:</b> ${customer.toUpperCase()}</p>
+<p><b>Environment:</b> ${envName.toUpperCase()}</p>
+<p><b>Total Spend:</b> \$${totalSpend}</p>
 <p><b>Usage:</b> ${usage}%</p>
 
 <table border="1" cellpadding="6" cellspacing="0">
@@ -190,23 +184,19 @@ ${serviceTable}
 """
 
             } catch (err) {
-              echo "❌ Failed for ${customer}: ${err}"
+              echo "Failed for ${customer}: ${err}"
             }
           }
 
-          // =========================
-          // SINGLE CONSOLIDATED EMAIL
-          // =========================
-
           emailext(
-            to: env.EMAIL_RECIPIENTS,
-            subject: "📊 Consolidated Cost Report | ${new Date()}",
+            to: EMAIL_RECIPIENTS,
+            subject: "📊 Consolidated Cost Report",
             mimeType: 'text/html',
             body: """
 <h2>📊 Multi-Tenant Cost Monitoring</h2>
 
-<p><b>Total Spend Across All Tenants:</b> 
-<span style="color:red;">$${String.format('%.2f', GRAND_TOTAL)}</span></p>
+<p><b>Total Spend Across All Tenants:</b>
+<span style="color:red;">\$${String.format('%.2f', GRAND_TOTAL)}</span></p>
 
 ${FINAL_REPORT}
 
