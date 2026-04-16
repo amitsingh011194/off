@@ -1,27 +1,5 @@
-properties([
-  parameters([
-    choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','nrgr','lfs','clientdemo']),
-    choice(name: 'ENVIRONMENT', choices: ['prod','uat','dev']),
-    string(name: 'AWS_REGION', defaultValue: 'us-east-1'),
-    booleanParam(name: 'RUN_ALL', defaultValue: true, description: 'Run for all customers (cron mode)')
-  ])
-])
 
-pipeline {
-  agent { label 'cicd' }
-
-  triggers {
-    cron('H H */7 * *')
-  }
-
-  environment {
-    OIDC_ROLE_NAME   = "paymentor-oidc-role"
-    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com"
-  }
-
-  stages {
-
-    stage('Process Tenants') {
+stage('Process Tenants') {
       steps {
         script {
 
@@ -135,31 +113,61 @@ pipeline {
               // GRAND TOTAL SAFE ADD (NO DOUBLE CONVERSION)
               GRAND_TOTAL += (totalSpend as BigDecimal ?: 0)
 
-              def serviceTable = ""
+             def serviceTable = ""
 
-              if (fileExists('decoded_logs.txt')) {
+if (fileExists('decoded_logs.txt')) {
 
-                def lines = readFile('decoded_logs.txt').split('\n')
+  def serviceList = []
 
-                lines.each { line ->
-                  if (line.contains('→ $')) {
+  def lines = readFile('decoded_logs.txt').split('\n')
 
-                    def parts = line.split('→')
-                    def service = parts[0].trim()
-                    def costStr = parts[1].replace('$','').trim()
+  // -----------------------------
+  // 1. Parse services + costs
+  // -----------------------------
+  lines.each { line ->
+    if (line.contains('→ $')) {
 
-                    // SAFE: no parseDouble, just display
-                    def costDisplay = costStr
+      def parts = line.split('→')
+      def service = parts[0].trim()
+      def costStr = parts[1].replace('$','').trim()
 
-                    serviceTable += """
+      def cost = 0
+      try {
+        cost = costStr as BigDecimal
+      } catch (Exception e) {
+        cost = 0
+      }
+
+      serviceList << [name: service, cost: cost]
+    }
+  }
+
+  // -----------------------------
+  // 2. Sort by cost desc
+  // -----------------------------
+  serviceList = serviceList.sort { -it.cost }
+
+  // -----------------------------
+  // 3. Build HTML with ranking
+  // -----------------------------
+  serviceList.eachWithIndex { item, idx ->
+
+    def color = "black"
+
+    if (idx == 0) {
+      color = "red"       // highest spender
+    } else if (idx == 1) {
+      color = "orange"    // second highest
+    }
+
+    serviceTable += """
 <tr>
-<td>${service}</td>
-<td><b>\$${costDisplay}</b></td>
+<td>${item.name}</td>
+<td><b style="color:${color}">\$${item.cost}</b></td>
 </tr>
 """
-                  }
-                }
-              }
+  }
+}
 
               FINAL_REPORT += """
 <hr/>
@@ -198,11 +206,4 @@ ${FINAL_REPORT}
         }
       }
     }
-  }
-
-  post {
-    always {
-      deleteDir()
-    }
-  }
-}
+Please update this stage accordingly
