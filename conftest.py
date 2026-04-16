@@ -1,6 +1,6 @@
 properties([
   parameters([
-    choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','mf','pra','mbac','nrgr','omf','lfs','clientdemo']),
+    choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','nrgr','lfs','clientdemo']),
     choice(name: 'ENVIRONMENT', choices: ['prod','uat','dev']),
     string(name: 'AWS_REGION', defaultValue: 'us-east-1'),
     booleanParam(name: 'RUN_ALL', defaultValue: true, description: 'Run for all customers (cron mode)')
@@ -26,7 +26,7 @@ pipeline {
         script {
 
           def FINAL_REPORT = ""
-          def GRAND_TOTAL = 0.0
+          def GRAND_TOTAL = 0
 
           def envAccountMap = [
             dev:  '607436280417',
@@ -56,16 +56,13 @@ pipeline {
             [env: 'prod', customer: 'hsbcinm'],
             [env: 'prod', customer: 'hsbcmyh'],
             [env: 'prod', customer: 'sce'],
-            [env: 'prod', customer: 'mf'],
-            [env: 'prod', customer: 'pra'],
-            [env: 'prod', customer: 'mbac'],
             [env: 'prod', customer: 'nrgr'],
-            [env: 'prod', customer: 'omf'],
             [env: 'prod', customer: 'lfs'],
             [env: 'prod', customer: 'clientdemo']
           ]
 
-          def executionList = params.RUN_ALL ? TARGETS : [[env: params.ENVIRONMENT, customer: params.CUSTOMER]]
+          def executionList = params.RUN_ALL ? TARGETS :
+            [[env: params.ENVIRONMENT, customer: params.CUSTOMER]]
 
           for (t in executionList) {
 
@@ -89,7 +86,6 @@ pipeline {
               }
 
               def tenantShort = mapping[envName].tenant_id
-              def tenantEnv   = mapping[envName].tenant_env
 
               def selectedMap =
                 (customer == 'lfs') ? envAccountMapLFS :
@@ -104,8 +100,6 @@ pipeline {
 
                 sh """
                   set -e
-
-                  echo "Invoking Lambda: ${lambdaName}"
                   printf '{"tenant_prefix":"%s"}' "${tenantShort}" > payload.json
 
                   aws lambda invoke \
@@ -135,10 +129,11 @@ pipeline {
                           lambdaResponse.body
 
               def tenant = body.tenant ?: tenantShort
-              def totalSpend = (body.total_spend ?: 0).toDouble()
+              def totalSpend = body.total_spend ?: 0
               def usage = body.usage_percent ?: 0
 
-              GRAND_TOTAL += totalSpend
+              // GRAND TOTAL SAFE ADD (NO DOUBLE CONVERSION)
+              GRAND_TOTAL += (totalSpend as BigDecimal ?: 0)
 
               def serviceTable = ""
 
@@ -153,16 +148,13 @@ pipeline {
                     def service = parts[0].trim()
                     def costStr = parts[1].replace('$','').trim()
 
-                    def cost = costStr.isNumber() ? costStr.toDouble() : 0.0
-
-                    def color =
-                      cost > 10 ? 'red' :
-                      cost > 1 ? 'orange' : 'black'
+                    // SAFE: no parseDouble, just display
+                    def costDisplay = costStr
 
                     serviceTable += """
 <tr>
 <td>${service}</td>
-<td><b style="color:${color}">\$${cost}</b></td>
+<td><b>\$${costDisplay}</b></td>
 </tr>
 """
                   }
@@ -196,7 +188,7 @@ ${serviceTable}
 <h2>📊 Multi-Tenant Cost Monitoring</h2>
 
 <p><b>Total Spend Across All Tenants:</b>
-<span style="color:red;">\$${String.format('%.2f', GRAND_TOTAL)}</span></p>
+<span style="color:red;">\$${GRAND_TOTAL}</span></p>
 
 ${FINAL_REPORT}
 
