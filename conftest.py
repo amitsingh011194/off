@@ -11,7 +11,7 @@ pipeline {
   agent { label 'cicd' }
 
   triggers {
-    cron('H/30 * * * *')  // every 30 mins (for testing)
+    cron('H H */7 * *')  // every 30 mins (for testing)
   }
 
   environment {
