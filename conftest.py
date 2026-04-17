@@ -1,236 +1,142 @@
-properties([
-  parameters([
-    choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','nrgr','lfs','clientdemo']),
-    choice(name: 'ENVIRONMENT', choices: ['prod','uat','dev']),
-    string(name: 'AWS_REGION', defaultValue: 'us-east-1'),
-    booleanParam(name: 'RUN_ALL', defaultValue: true, description: 'Run for all customers (cron mode)')
-  ])
-])
+import boto3
+import os
+from datetime import date
 
-pipeline {
-  agent { label 'cicd' }
+ce = boto3.client('ce')
 
-  triggers {
-    cron('H H */7 * *')
-  }
+LIMIT = float(os.environ.get("LIMIT", 1000))
+THRESHOLD = float(os.environ.get("THRESHOLD", 70))
 
-  environment {
-    OIDC_ROLE_NAME   = "paymentor-oidc-role"
-    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com"
-  }
+TAG_KEY = "sb:cost:tenant"
 
-  stages {
 
-    /* ================================================= */
-    stage('Initialize Context') {
-    /* ================================================= */
-      steps {
-        script {
-          GRAND_TOTAL   = 0
-          FINAL_REPORT  = ""
-          tenantResults = [:]
+def get_matching_tenants(prefix, start, end):
+    """Fetch all tenant tag values and filter by prefix"""
+    response = ce.get_tags(
+        TimePeriod={'Start': start, 'End': end},
+        TagKey=TAG_KEY
+    )
 
-          envAccountMap = [
-            dev  : '607436280417',
-            uat  : '658960620175',
-            prod : '016795361898'
-          ]
+    all_tags = response.get('Tags', [])
+    print(f"All tenant tags: {all_tags}")
 
-          envAccountMapLFS = [
-            dev  : '116981803571',
-            uat  : '216989139664',
-            prod : '767828744639'
-          ]
+    matched = [t for t in all_tags if t.startswith(prefix)]
 
-          envAccountMapHSBC = [
-            dev  : '088082905288',
-            uat  : '793586321398',
-            prod : '501957928506'
-          ]
+    print(f"Matched tenants for prefix '{prefix}': {matched}")
 
-          TARGETS = [
-            [env:'prod', customer:'tdb'],
-            [env:'prod', customer:'lcc'],
-            [env:'prod', customer:'fdr'],
-            [env:'prod', customer:'nrg'],
-            [env:'prod', customer:'demo'],
-            [env:'prod', customer:'bcs'],
-            [env:'prod', customer:'hsbcinm'],
-            [env:'prod', customer:'hsbcmyh'],
-            [env:'prod', customer:'sce'],
-            [env:'prod', customer:'nrgr'],
-            [env:'prod', customer:'lfs'],
-            [env:'prod', customer:'clientdemo']
-          ]
+    return matched
 
-          executionList = params.RUN_ALL ?
-            TARGETS :
-            [[env: params.ENVIRONMENT, customer: params.CUSTOMER]]
-        }
-      }
-    }
 
-    /* ================================================= */
-    stage('Process Tenants (Parallel)') {
-    /* ================================================= */
-      steps {
-        script {
+def lambda_handler(event, context):
+    try:
+        # 👇 Pass prefix like "3878909f"
+        tenant_prefix = event.get("tenant_prefix")
 
-          def branches = [:]
+        if not tenant_prefix:
+            raise ValueError("tenant_prefix is required")
 
-          executionList.each { t ->
+        start = date.today().replace(day=1).strftime('%Y-%m-%d')
+        end = date.today().strftime('%Y-%m-%d')
 
-            def CUSTOMER = t.customer
-            def ENV_NAME = t.env
+        print(f"Fetching cost for tenant prefix: {tenant_prefix}")
 
-            branches["Tenant | ${CUSTOMER}"] = {
+        # 🔍 Step 1: Get all matching tenants
+        tenant_values = get_matching_tenants(tenant_prefix, start, end)
 
-              def tenantTotal  = 0
-              def tenantReport = ""
-
-              try {
-                echo "Processing ${CUSTOMER} - ${ENV_NAME}"
-
-                /* ---- Mapping ---- */
-                def mapFile = "resources/customer-mapping/${CUSTOMER}.json"
-                if (!fileExists(mapFile)) return
-
-                def mapping = readJSON file: mapFile
-                if (!mapping.containsKey(ENV_NAME)) return
-
-                def TENANT_SHORT = mapping[ENV_NAME].tenant_id
-
-                /* ---- Account selection ---- */
-                def selectedMap =
-                  (CUSTOMER == 'lfs') ? envAccountMapLFS :
-                  (CUSTOMER in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
-                  envAccountMap
-
-                def ACCOUNT_ID = selectedMap[ENV_NAME]
-                def ROLE_ARN  = "arn:aws:iam::${ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
-                def LAMBDA    = "sb-prod3-3878909f-service_limit_lambdas"
-
-                def payload = "payload-${CUSTOMER}.json"
-                def output  = "output-${CUSTOMER}.json"
-                def meta    = "meta-${CUSTOMER}.json"
-                def logs    = "logs-${CUSTOMER}.txt"
-
-                withAWS(role: ROLE_ARN, useNode: true) {
-                  sh """
-                    set -e
-                    printf '{"tenant_prefix":"%s"}' "${TENANT_SHORT}" > ${payload}
-
-                    aws lambda invoke \
-                      --function-name ${LAMBDA} \
-                      --region ${AWS_REGION} \
-                      --cli-binary-format raw-in-base64-out \
-                      --payload file://${payload} \
-                      --log-type Tail \
-                      ${output} > ${meta}
-
-                    LOG_RESULT=\$(jq -r '.LogResult' ${meta})
-                    [ "\$LOG_RESULT" != "null" ] && echo "\$LOG_RESULT" | base64 --decode > ${logs}
-                  """
+        if not tenant_values:
+            print("No matching tenants found")
+            return {
+                "statusCode": 200,
+                "body": {
+                    "tenant_prefix": tenant_prefix,
+                    "total_spend": 0,
+                    "usage_percent": 0,
+                    "service_breakdown": {}
                 }
-
-                if (!fileExists(output)) return
-
-                def resp = readJSON file: output
-                def BODY = (resp.body instanceof String) ? readJSON(text: resp.body) : resp.body
-
-                tenantTotal = BODY.total_spend ?: 0
-                def USAGE   = BODY.usage_percent ?: 0
-                def TENANT  = BODY.tenant ?: TENANT_SHORT
-
-                def serviceTable = ""
-
-                if (fileExists(logs)) {
-                  readFile(logs).split('\n').each { l ->
-                    if (l.contains('→ $')) {
-                      def p = l.split('→')
-                      serviceTable += """
-<tr>
-  <td>${p[0].trim()}</td>
-  <td><b>\$${p[1].replace('$','').trim()}</b></td>
-</tr>
-"""
-                    }
-                  }
-                }
-
-                tenantReport = """
-<hr/>
-<h3>Tenant: ${TENANT}</h3>
-<p><b>Client:</b> ${CUSTOMER.toUpperCase()}</p>
-<p><b>Environment:</b> ${ENV_NAME.toUpperCase()}</p>
-<p><b>Total Spend:</b> \$${tenantTotal}</p>
-<p><b>Usage:</b> ${USAGE}%</p>
-
-<table border="1" cellpadding="6" cellspacing="0">
-<tr><th>Service</th><th>Cost</th></tr>
-${serviceTable}
-</table>
-"""
-              }
-              catch (err) {
-                echo "Failed for ${CUSTOMER}: ${err}"
-              }
-
-              tenantResults[CUSTOMER] = [
-                total : tenantTotal,
-                html  : tenantReport
-              ]
             }
-          }
 
-          parallel branches
+        # -----------------------------
+        # 1️⃣ TOTAL COST (Filtered tenants)
+        # -----------------------------
+        total_response = ce.get_cost_and_usage(
+            TimePeriod={'Start': start, 'End': end},
+            Granularity='MONTHLY',
+            Metrics=['UnblendedCost'],
+            Filter={
+                "And": [
+                    {
+                        "Dimensions": {
+                            "Key": "SERVICE",
+                            "Values": ["AWS End User Messaging"]
+                        }
+                    },
+                    {
+                        "Tags": {
+                            "Key": TAG_KEY,
+                            "Values": tenant_values
+                        }
+                    }
+                ]
+            }
+        )
+
+        total_amount = float(
+            total_response['ResultsByTime'][0]['Total']['UnblendedCost']['Amount']
+        )
+
+        percent = (total_amount / LIMIT) * 100 if LIMIT > 0 else 0
+
+        # -----------------------------
+        # 2️⃣ SERVICE BREAKDOWN
+        # -----------------------------
+        service_response = ce.get_cost_and_usage(
+            TimePeriod={'Start': start, 'End': end},
+            Granularity='MONTHLY',
+            Metrics=['UnblendedCost'],
+            GroupBy=[
+                {"Type": "DIMENSION", "Key": "SERVICE"}
+            ],
+            Filter={
+                "Tags": {
+                    "Key": TAG_KEY,
+                    "Values": tenant_values
+                }
+            }
+        )
+
+        service_costs = {}
+
+        for group in service_response['ResultsByTime'][0]['Groups']:
+            service_name = group['Keys'][0]
+            cost = float(group['Metrics']['UnblendedCost']['Amount'])
+
+            if cost > 0:
+                service_costs[service_name] = round(cost, 2)
+
+        # -----------------------------
+        # 📊 Logs
+        # -----------------------------
+        print("\n=== TENANT SUMMARY ===")
+        print(f"Prefix: {tenant_prefix}")
+        print(f"Matched Tenants: {tenant_values}")
+        print(f"Total Spend: ${round(total_amount, 2)}")
+        print(f"Usage: {percent:.2f}% of ${LIMIT}")
+
+        print("\n=== SERVICE BREAKDOWN ===")
+        for svc, cost in service_costs.items():
+            print(f"{svc} → ${cost}")
+
+        return {
+            "statusCode": 200,
+            "body": {
+                "tenant_prefix": tenant_prefix,
+                "matched_tenants": tenant_values,
+                "total_spend": round(total_amount, 2),
+                "usage_percent": round(percent, 2),
+                "service_breakdown": service_costs
+            }
         }
-      }
-    }
 
-    /* ================================================= */
-    stage('Aggregate & Send Email') {
-    /* ================================================= */
-      steps {
-        script {
-          tenantResults.each { _, r ->
-            GRAND_TOTAL  += (r.total as BigDecimal ?: 0)
-            FINAL_REPORT += r.html ?: ""
-          }
-
-          emailext(
-            to: EMAIL_RECIPIENTS,
-            subject: "📊 Consolidated Cost Report",
-            mimeType: 'text/html',
-            body: """
-<div style="font-family:Arial;background:#f4f6f8;padding:20px;">
-<div style="max-width:900px;margin:auto;background:#fff;padding:20px;border-radius:8px;">
-<h2>📊 Multi‑Tenant Cost Monitoring Report</h2>
-
-<table width="100%" style="background:#fff3cd;border:1px solid #ffeeba;margin:20px 0;">
-<tr><td>
-<span>💰 Grand Total Spend</span><br/>
-<span style="font-size:28px;font-weight:bold;color:#a94442;">
-\$${GRAND_TOTAL}
-</span>
-</td></tr>
-</table>
-
-${FINAL_REPORT}
-
-<p style="font-size:12px;color:#999;">Generated automatically by Jenkins CI/CD Pipeline</p>
-</div>
-</div>
-"""
-          )
-        }
-      }
-    }
-  }
-
-  post {
-    always {
-      deleteDir()
-    }
-  }
-}
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        raise
