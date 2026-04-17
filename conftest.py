@@ -1,239 +1,216 @@
-
-
-
-Claim offer
-
 properties([
-    parameters([
-        choice(name: 'PLATFORM', choices: ['multi-tenant-platform'], description: 'Which Platform is the AWS account on?'),
-        choice(name: 'CUSTOMER', choices: ['demo','clientdemo','mf','pra','omf','bcs','lfs','sce','nrg','nrgr'], description: 'Please choose the customer'),
-        choice(name: 'ENVIRONMENT', choices: ['dev','uat','prod'], description: 'Which Enviornment you want to deploy to'),
-        booleanParam(name: 'INCLUDE_JAVA_LAMBDAS', defaultValue: false, description: 'Include application/java/lambda in artifact zip?')
-       // string(name: 'VERSION', defaultValue: '', description: 'Provide a specific version to deploy'),
-       // booleanParam(name: 'RUN_FLYWAY', defaultValue: false, description: 'Set to true to run Flyway')
-    ])
+  parameters([
+    choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','nrgr','lfs','clientdemo']),
+    choice(name: 'ENVIRONMENT', choices: ['prod','uat','dev']),
+    string(name: 'AWS_REGION', defaultValue: 'us-east-1'),
+    booleanParam(name: 'RUN_ALL', defaultValue: true, description: 'Run for all customers (cron mode)')
+  ])
 ])
 
 pipeline {
-    agent  {
-        label 'cicd' 
+  agent { label 'cicd' }
+
+  triggers {
+    cron('H H */7 * *')
+  }
+
+  environment {
+    OIDC_ROLE_NAME   = "paymentor-oidc-role"
+    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com"
+  }
+
+  stages {
+
+    stage('Process Tenants') {
+      steps {
+        script {
+
+          def FINAL_REPORT = ""
+          def GRAND_TOTAL = 0
+
+          def envAccountMap = [
+            dev:  '607436280417',
+            uat:  '658960620175',
+            prod: '016795361898'
+          ]
+
+          def envAccountMapLFS = [
+            dev:  '116981803571',
+            uat:  '216989139664',
+            prod: '767828744639'
+          ]
+
+          def envAccountMapHSBC = [
+            dev:  '088082905288',
+            uat:  '793586321398',
+            prod: '501957928506'
+          ]
+
+          def TARGETS = [
+            [env: 'prod', customer: 'tdb'],
+            [env: 'prod', customer: 'lcc'],
+            [env: 'prod', customer: 'fdr'],
+            [env: 'prod', customer: 'nrg'],
+            [env: 'prod', customer: 'demo'],
+            [env: 'prod', customer: 'bcs'],
+            [env: 'prod', customer: 'hsbcinm'],
+            [env: 'prod', customer: 'hsbcmyh'],
+            [env: 'prod', customer: 'sce'],
+            [env: 'prod', customer: 'nrgr'],
+            [env: 'prod', customer: 'lfs'],
+            [env: 'prod', customer: 'clientdemo']
+          ]
+
+          def executionList = params.RUN_ALL ? TARGETS :
+            [[env: params.ENVIRONMENT, customer: params.CUSTOMER]]
+
+          for (t in executionList) {
+
+            def customer = t.customer
+            def envName  = t.env
+
+            echo "Processing ${customer} - ${envName}"
+
+            try {
+
+              def mappingFile = "resources/customer-mapping/${customer}.json"
+              if (!fileExists(mappingFile)) {
+                echo "Mapping missing for ${customer}"
+                continue
+              }
+
+              def mapping = readJSON file: mappingFile
+              if (!mapping.containsKey(envName)) {
+                echo "Env missing for ${customer}"
+                continue
+              }
+
+              def tenantShort = mapping[envName].tenant_id
+
+              def selectedMap =
+                (customer == 'lfs') ? envAccountMapLFS :
+                (customer in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
+                envAccountMap
+
+              def accountId = selectedMap[envName]
+              def roleArn = "arn:aws:iam::${accountId}:role/${OIDC_ROLE_NAME}"
+              def lambdaName = "sb-prod3-3878909f-service_limit_lambdas"
+
+              withAWS(role: roleArn, useNode: true) {
+
+                sh """
+                  set -e
+                  printf '{"tenant_prefix":"%s"}' "${tenantShort}" > payload.json
+
+                  aws lambda invoke \
+                    --function-name ${lambdaName} \
+                    --region ${AWS_REGION} \
+                    --cli-binary-format raw-in-base64-out \
+                    --payload file://payload.json \
+                    --log-type Tail \
+                    output.json > lambda_output.txt
+
+                  LOG_RESULT=\$(cat lambda_output.txt | jq -r '.LogResult')
+
+                  if [ "\$LOG_RESULT" != "null" ]; then
+                    echo \$LOG_RESULT | base64 --decode > decoded_logs.txt
+                  fi
+                """
+              }
+
+              if (!fileExists('output.json')) {
+                continue
+              }
+
+              def lambdaResponse = readJSON file: 'output.json'
+
+              def body = (lambdaResponse.body instanceof String) ?
+                          readJSON(text: lambdaResponse.body) :
+                          lambdaResponse.body
+
+              def tenant = body.tenant ?: tenantShort
+              def totalSpend = body.total_spend ?: 0
+              def usage = body.usage_percent ?: 0
+
+              // GRAND TOTAL SAFE ADD (NO DOUBLE CONVERSION)
+              GRAND_TOTAL += (totalSpend as BigDecimal ?: 0)
+
+              def serviceTable = ""
+
+              if (fileExists('decoded_logs.txt')) {
+
+                def lines = readFile('decoded_logs.txt').split('\n')
+
+                lines.each { line ->
+                  if (line.contains('→ $')) {
+
+                    def parts = line.split('→')
+                    def service = parts[0].trim()
+                    def costStr = parts[1].replace('$','').trim()
+
+                    // SAFE: no parseDouble, just display
+                    def costDisplay = costStr
+
+                    serviceTable += """
+<tr>
+<td>${service}</td>
+<td><b>\$${costDisplay}</b></td>
+</tr>
+"""
+                  }
+                }
+              }
+
+              FINAL_REPORT += """
+<hr/>
+<h3>Tenant: ${tenant}</h3>
+<p><b>Client:</b> ${customer.toUpperCase()}</p>
+<p><b>Environment:</b> ${envName.toUpperCase()}</p>
+<p><b>Total Spend:</b> \$${totalSpend}</p>
+<p><b>Usage:</b> ${usage}%</p>
+
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>Service</th><th>Cost</th></tr>
+${serviceTable}
+</table>
+"""
+
+            } catch (err) {
+              echo "Failed for ${customer}: ${err}"
+            }
+          }
+
+          emailext(
+            to: EMAIL_RECIPIENTS,
+            subject: "📊 Consolidated Cost Report",
+            mimeType: 'text/html',
+            body: """
+<h2>📊 Multi-Tenant Cost Monitoring</h2>
+
+<p><b>Total Spend Across All Tenants:</b>
+<span style="color:red;">\$${GRAND_TOTAL}</span></p>
+
+${FINAL_REPORT}
+
+<br/><p><i>Generated from Jenkins Pipeline</i></p>
+"""
+          )
+        }
+      }
     }
+  }
 
-    environment {
-        PLATFORM="${params.PLATFORM}"
-        CUSTOMER="${params.CUSTOMER}"
-        ENVIRONMENT="${params.ENVIRONMENT}"
-        //REGION="us-east-1"
-        VERSION="${params.VERSION}"
-        //RUN_FLYWAY="${params.RUN_FLYWAY}"
-        //GIT_REPO_URL_TERRAFORM="https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-dgt-paymentor-core-aws-iac.git"
-        GIT_REPO_URL_APPCODE="https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-digital-paymentor-core-app.git"
-        OIDC_ROLE_NAME="paymentor-oidc-role"
-        DATE ="${new Date().format('yyyyMMdd')}"    
+  post {
+    always {
+      deleteDir()
     }
-
-    stages {
-        stage('Auth Check') {
-            when {
-                expression { "${ENVIRONMENT}" != "dev" }
-            }
-            steps {
-                script {
-                    sh """
-                        chmod +x scripts/env-protection.sh && ./scripts/env-protection.sh deploy
-                    """
-                }
-            }
-        }
-        stage('Get customer mapping') {
-            steps {
-                script {
-                     currentBuild.description = "CUSTOMER: ${env.CUSTOMER} \n BRANCH: ${env.BRANCH} \n ENVIRONMENT: ${env.ENVIRONMENT} \n BUILT BY: ${env.BUILD_USER_ID}"
-                    // Define environment-to-account ID mapping
-                    def envAccountMap = [
-                        dev: '607436280417',
-                        uat: '658960620175',
-                        prod: '016795361898'
-                    ]
-
-                     // Get the account ID based on selected TARGET_ENV
-                    env.AWS_ACCOUNT_ID = envAccountMap[params.ENVIRONMENT]
-                    env.AWS_ROLE_ARN = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
-                    
-                    // Get TENANT_ENV and TENANT_ID from customer json file
-                    env.TENANT_ENV = sh(script: "jq -r --arg env '${ENVIRONMENT}' '.[\$env].tenant_env' resources/customer-mapping/${CUSTOMER}.json", returnStdout: true).trim()
-                    env.TENANT_ID = sh(script: "jq -r --arg env '${ENVIRONMENT}' '.[\$env].tenant_id' resources/customer-mapping/${CUSTOMER}.json", returnStdout: true).trim()
-
-                    echo "Selected ENVIRONMENT: ${ENVIRONMENT}"
-                    echo "Mapped AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID}"
-                    echo "AWS_ROLE_ARN: ${AWS_ROLE_ARN}"
-                    echo "TENANT_ID: ${TENANT_ID}"
-                    echo "TENANT_ENV: ${TENANT_ENV}"
-                }
-            }
-        }
-        stage('git checkout') {
-            steps {
-              //  checkout([$class: 'GitSCM', branches: [[name: "main"]], extensions: [], userRemoteConfigs: [[url: "${GIT_REPO_URL_TERRAFORM}"]]])
-                checkout([$class: 'GitSCM', branches: [[name: "client/${CUSTOMER}/${ENVIRONMENT}"]], extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'ApplicationCodeRepo']], userRemoteConfigs: [[url: "${GIT_REPO_URL_APPCODE}"]]])
-            }
-        }
-        
- stage('generate artifacts') {
-    steps{
-        sh """
-        mkdir -p output
-
-        BASE_PATH="ApplicationCodeRepo/application"
-        ZIP_FILE="output/paym-artifacts-${CUSTOMER}-${DATE}.zip"
-
-        FILES="\$BASE_PATH/db \$BASE_PATH/lambdas"
-
-        # Include Java lambdas if enabled
-        if [ "\${INCLUDE_JAVA_LAMBDAS}" = "true" ]; then
-            FILES="\$FILES \$BASE_PATH/java/lambdas"
-        fi
-
-        # Include ECS folder only if it exists
-        if [ -d "\$BASE_PATH/ecs" ]; then
-            echo "ECS folder found, including in zip"
-            FILES="\$FILES \$BASE_PATH/ecs"
-        else
-            echo "ECS folder not found, skipping"
-        fi
-
-        zip -r \$ZIP_FILE \$FILES -x "*/env_vars/*" "*/README.md"
-        """
-    }
-}
-
-        /*
-        stage('terraform plan') {
-            steps {
-                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-                    script {
-                        ansiColor('xterm') {
-                            sh """
-                                terraform init -no-color -backend-config="bucket=${AWS_ACCOUNT_ID}-paymentor-tf-state-mgmt" -backend-config="key=${TENANT_ENV}/${TENANT_ID}/terraform.tfstate"
-                                terraform validate
-                                echo ${VERSION}
-                                terraform plan -no-color -out=tfplan -var "customer_id=${TENANT_ID}" -var "env_id=${TENANT_ENV}" -var "target_env=${ENVIRONMENT}" -var "paymentor_version=${VERSION}" -var-file="ApplicationCodeRepo/application_config/${ENVIRONMENT}.tfvars"
-                               # terraform plan -no-color -out=tfplan -var "customer_id=${TENANT_ID}" -var "env_id=${TENANT_ENV}" -var "target_env=${ENVIRONMENT}" -var "paymentor_version=${VERSION}" -var-file="ApplicationCodeRepo/application_config/${ENVIRONMENT}.tfvars"
-                            """
-                         }
-                    }
-                }
-            }
-        }
-    
-        stage('terragrunt plan') {
-            steps {
-                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-                    script {
-                        ansiColor('xterm') {
-                            sh """
-                                TF_VAR_paymentor_version=${VERSION} terragrunt plan --terragrunt-working-dir multi-tenant-platform/${ENVIRONMENT}/${CUSTOMER}/${REGION}/paymentor-core
-                            """
-                         }
-                    }
-                }
-            }
-        }
-
-        
-        stage('Run terragrunt Apply?') {
-            input {
-                message 'Continue with deploy?'
-                ok 'Approve'
-                submitterParameter 'approverId'
-            }
-
-            steps {
-                echo "Deployment approved by ${approverId}."
-            }
-        }
-        stage('terragrunt apply') {
-            when {
-                expression { "${ENVIRONMENT}" != "prod" }
-            }
-            steps {
-                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-                    script {
-                        sh """
-                            TF_VAR_paymentor_version=${VERSION} terragrunt apply --terragrunt-working-dir multi-tenant-platform/${ENVIRONMENT}/${CUSTOMER}/${REGION}/paymentor-core
-                        """
-                    }
-                }
-            }
-        }
-        stage('flyway deployment') {
-            when {
-                expression { "${RUN_FLYWAY}" == true }
-            }
-            steps {
-                script {
-                    sh """
-                        chmod -R +x scripts
-                        scripts/flyway.sh
-                    """
-                }
-            }
-        }
-        stage('Prod Protection') {
-            when {
-                expression { "${ENVIRONMENT}" == "prod" }
-            }
-            input {
-                id 'ProductionApproval'
-                message 'WARNING: You are about to deploy to PRODUCTION! This cannot be undone. Do you want to proceed?'
-                ok 'Yes, Deploy to Production'
-                submitterParameter 'approverId'
-                parameters {
-                    booleanParam(name: 'CONFIRM_DEPLOY', defaultValue: false, description: 'Check this box to confirm deployment to production')
-                }
-            }
-            steps {
-                script {
-                    if (env.CONFIRM_DEPLOY != "true") {
-                        error "❌ Deployment aborted: CONFIRM_DEPLOY is not set to 'true'."
-                    }
-                }
-            }
-        }
-        stage('Deploy Production') {
-            when {
-                expression { "${ENVIRONMENT}" == "prod" }
-            }
-            steps {
-                script {
-                    echo "Deploy to prod"
-                }
-            }
-            // steps {
-            //     withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-            //         script {
-            //             sh """
-            //                 TF_VAR_paymentor_version=${VERSION} terragrunt apply --terragrunt-working-dir multi-tenant-platform/${ENVIRONMENT}/${CUSTOMER}/${REGION}/paymentor-core
-            //             """
-            //         }
-            //     }
-            // }
-        } */
-    }
-    post {
-        always {
-            archiveArtifacts artifacts: "output/paym-artifacts-${CUSTOMER}-*.zip", fingerprint: true
-        }
-    }
+  }
 }
 
 
 
-currently which all folders is it zipping?
+So currently we have this and it is working completely alright.
 
-Something went wrong. If this issue persists please contact us through our help center at help.openai.com.
+Now I need to do few improvment in the way we are looking at the data.
 
-
-Retry
-
-
+Currently it looks pretty boring. I guess we should add more html and make it more good looking, what do you think.
