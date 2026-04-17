@@ -62,22 +62,12 @@ def lambda_handler(event, context):
             TimePeriod={'Start': start, 'End': end},
             Granularity='MONTHLY',
             Metrics=['UnblendedCost'],
-            Filter={
-                "And": [
-                    {
-                        "Dimensions": {
-                            "Key": "SERVICE",
-                            "Values": ["AWS End User Messaging"]
-                        }
-                    },
-                    {
-                        "Tags": {
-                            "Key": TAG_KEY,
-                            "Values": tenant_values
-                        }
-                    }
-                ]
-            }
+           Filter={
+    "Tags": {
+        "Key": TAG_KEY,
+        "Values": tenant_values
+         }
+         }
         )
 
         total_amount = float(
