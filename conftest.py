@@ -98,3 +98,11 @@ Total Spend: $248.91
 
 Usage: 1.24%
 
+so this is how its showing currently...
+It's good but now the service wise cost is not showing up for each tenant. why is that?
+
+
+
+
+
+
