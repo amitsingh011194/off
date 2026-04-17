@@ -21,32 +21,33 @@ pipeline {
 
   stages {
 
-    stage('Process Tenants') {
+    /* ============================= */
+    stage('Initialize Context') {
+    /* ============================= */
       steps {
         script {
+          FINAL_REPORT = ""
+          GRAND_TOTAL  = 0
 
-          def FINAL_REPORT = ""
-          def GRAND_TOTAL = 0
-
-          def envAccountMap = [
+          envAccountMap = [
             dev:  '607436280417',
             uat:  '658960620175',
             prod: '016795361898'
           ]
 
-          def envAccountMapLFS = [
+          envAccountMapLFS = [
             dev:  '116981803571',
             uat:  '216989139664',
             prod: '767828744639'
           ]
 
-          def envAccountMapHSBC = [
+          envAccountMapHSBC = [
             dev:  '088082905288',
             uat:  '793586321398',
             prod: '501957928506'
           ]
 
-          def TARGETS = [
+          TARGETS = [
             [env: 'prod', customer: 'tdb'],
             [env: 'prod', customer: 'lcc'],
             [env: 'prod', customer: 'fdr'],
@@ -61,138 +62,163 @@ pipeline {
             [env: 'prod', customer: 'clientdemo']
           ]
 
-          def executionList = params.RUN_ALL ? TARGETS :
+          executionList = params.RUN_ALL ?
+            TARGETS :
             [[env: params.ENVIRONMENT, customer: params.CUSTOMER]]
+        }
+      }
+    }
+
+    /* ============================= */
+    stage('Process Tenants') {
+    /* ============================= */
+      steps {
+        script {
 
           for (t in executionList) {
 
-            def customer = t.customer
-            def envName  = t.env
+            def CUSTOMER = t.customer
+            def ENV_NAME = t.env
 
-            echo "Processing ${customer} - ${envName}"
+            stage("Tenant | ${CUSTOMER}") {
 
-            try {
+              try {
+                echo "Processing ${CUSTOMER} - ${ENV_NAME}"
 
-              def mappingFile = "resources/customer-mapping/${customer}.json"
-              if (!fileExists(mappingFile)) {
-                echo "Mapping missing for ${customer}"
-                continue
-              }
+                /* ------- Resolve Mapping ------- */
+                def mappingFile = "resources/customer-mapping/${CUSTOMER}.json"
+                if (!fileExists(mappingFile)) {
+                  echo "Mapping missing for ${CUSTOMER}"
+                  return
+                }
 
-              def mapping = readJSON file: mappingFile
-              if (!mapping.containsKey(envName)) {
-                echo "Env missing for ${customer}"
-                continue
-              }
+                def mapping = readJSON file: mappingFile
+                if (!mapping.containsKey(ENV_NAME)) {
+                  echo "Env missing for ${CUSTOMER}"
+                  return
+                }
 
-              def tenantShort = mapping[envName].tenant_id
+                def TENANT_SHORT = mapping[ENV_NAME].tenant_id
 
-              def selectedMap =
-                (customer == 'lfs') ? envAccountMapLFS :
-                (customer in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
-                envAccountMap
+                /* ------- Account Resolution ------- */
+                def selectedMap =
+                  (CUSTOMER == 'lfs') ? envAccountMapLFS :
+                  (CUSTOMER in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
+                  envAccountMap
 
-              def accountId = selectedMap[envName]
-              def roleArn = "arn:aws:iam::${accountId}:role/${OIDC_ROLE_NAME}"
-              def lambdaName = "sb-prod3-3878909f-service_limit_lambdas"
+                def ACCOUNT_ID = selectedMap[ENV_NAME]
+                def ROLE_ARN  = "arn:aws:iam::${ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
+                def LAMBDA    = "sb-prod3-3878909f-service_limit_lambdas"
 
-              withAWS(role: roleArn, useNode: true) {
+                /* ------- Invoke Lambda ------- */
+                withAWS(role: ROLE_ARN, useNode: true) {
+                  sh """
+                    set -e
+                    printf '{"tenant_prefix":"%s"}' "${TENANT_SHORT}" > payload.json
 
-                sh """
-                  set -e
-                  printf '{"tenant_prefix":"%s"}' "${tenantShort}" > payload.json
+                    aws lambda invoke \
+                      --function-name ${LAMBDA} \
+                      --region ${AWS_REGION} \
+                      --cli-binary-format raw-in-base64-out \
+                      --payload file://payload.json \
+                      --log-type Tail \
+                      output.json > lambda_output.txt
 
-                  aws lambda invoke \
-                    --function-name ${lambdaName} \
-                    --region ${AWS_REGION} \
-                    --cli-binary-format raw-in-base64-out \
-                    --payload file://payload.json \
-                    --log-type Tail \
-                    output.json > lambda_output.txt
+                    LOG_RESULT=\$(jq -r '.LogResult' lambda_output.txt)
+                    if [ "\$LOG_RESULT" != "null" ]; then
+                      echo "\$LOG_RESULT" | base64 --decode > decoded_logs.txt
+                    fi
+                  """
+                }
 
-                  LOG_RESULT=\$(cat lambda_output.txt | jq -r '.LogResult')
+                if (!fileExists('output.json')) {
+                  return
+                }
 
-                  if [ "\$LOG_RESULT" != "null" ]; then
-                    echo \$LOG_RESULT | base64 --decode > decoded_logs.txt
-                  fi
-                """
-              }
+                /* ------- Parse Response ------- */
+                def lambdaResponse = readJSON file: 'output.json'
 
-              if (!fileExists('output.json')) {
-                continue
-              }
+                def BODY = (lambdaResponse.body instanceof String)
+                  ? readJSON(text: lambdaResponse.body)
+                  : lambdaResponse.body
 
-              def lambdaResponse = readJSON file: 'output.json'
+                def TENANT = BODY.tenant ?: TENANT_SHORT
+                def TOTAL  = BODY.total_spend ?: 0
+                def USAGE  = BODY.usage_percent ?: 0
 
-              def body = (lambdaResponse.body instanceof String) ?
-                          readJSON(text: lambdaResponse.body) :
-                          lambdaResponse.body
+                GRAND_TOTAL += (TOTAL as BigDecimal ?: 0)
 
-              def tenant = body.tenant ?: tenantShort
-              def totalSpend = body.total_spend ?: 0
-              def usage = body.usage_percent ?: 0
+                /* ------- Build Service Table ------- */
+                def SERVICE_TABLE = ""
 
-              // GRAND TOTAL SAFE ADD (NO DOUBLE CONVERSION)
-              GRAND_TOTAL += (totalSpend as BigDecimal ?: 0)
-
-              def serviceTable = ""
-
-              if (fileExists('decoded_logs.txt')) {
-
-                def lines = readFile('decoded_logs.txt').split('\n')
-
-                lines.each { line ->
-                  if (line.contains('→ $')) {
-
-                    def parts = line.split('→')
-                    def service = parts[0].trim()
-                    def costStr = parts[1].replace('$','').trim()
-
-                    // SAFE: no parseDouble, just display
-                    def costDisplay = costStr
-
-                    serviceTable += """
+                if (fileExists('decoded_logs.txt')) {
+                  readFile('decoded_logs.txt').split('\n').each { line ->
+                    if (line.contains('→ $')) {
+                      def parts = line.split('→')
+                      SERVICE_TABLE += """
 <tr>
-<td>${service}</td>
-<td><b>\$${costDisplay}</b></td>
+  <td>${parts[0].trim()}</td>
+  <td><b>\$${parts[1].replace('$','').trim()}</b></td>
 </tr>
 """
+                    }
                   }
                 }
-              }
 
-              FINAL_REPORT += """
+                /* ------- Append Report ------- */
+                FINAL_REPORT += """
 <hr/>
-<h3>Tenant: ${tenant}</h3>
-<p><b>Client:</b> ${customer.toUpperCase()}</p>
-<p><b>Environment:</b> ${envName.toUpperCase()}</p>
-<p><b>Total Spend:</b> \$${totalSpend}</p>
-<p><b>Usage:</b> ${usage}%</p>
+<h3>Tenant: ${TENANT}</h3>
+<p><b>Client:</b> ${CUSTOMER.toUpperCase()}</p>
+<p><b>Environment:</b> ${ENV_NAME.toUpperCase()}</p>
+<p><b>Total Spend:</b> \$${TOTAL}</p>
+<p><b>Usage:</b> ${USAGE}%</p>
 
 <table border="1" cellpadding="6" cellspacing="0">
-<tr><th>Service</th><th>Cost</th></tr>
-${serviceTable}
+  <tr><th>Service</th><th>Cost</th></tr>
+  ${SERVICE_TABLE}
 </table>
 """
 
-            } catch (err) {
-              echo "Failed for ${customer}: ${err}"
+              } catch (err) {
+                echo "Failed for ${CUSTOMER}: ${err}"
+              }
             }
           }
+        }
+      }
+    }
 
+    /* ============================= */
+    stage('Send Email Report') {
+    /* ============================= */
+      steps {
+        script {
           emailext(
             to: EMAIL_RECIPIENTS,
             subject: "📊 Consolidated Cost Report",
             mimeType: 'text/html',
             body: """
-<h2>📊 Multi-Tenant Cost Monitoring</h2>
+<div style="font-family:Arial;background:#f4f6f8;padding:20px;">
+ <div style="max-width:900px;margin:auto;background:#fff;padding:20px;border-radius:8px;">
+  <h2>📊 Multi‑Tenant Cost Monitoring Report</h2>
 
-<p><b>Total Spend Across All Tenants:</b>
-<span style="color:red;">\$${GRAND_TOTAL}</span></p>
+  <table width="100%" style="background:#fff3cd;border:1px solid #ffeeba;margin:20px 0;">
+   <tr><td>
+    <span>💰 Grand Total Spend</span><br/>
+    <span style="font-size:28px;font-weight:bold;color:#a94442;">
+      \$${GRAND_TOTAL}
+    </span>
+   </td></tr>
+  </table>
 
-${FINAL_REPORT}
+  ${FINAL_REPORT}
 
-<br/><p><i>Generated from Jenkins Pipeline</i></p>
+  <p style="font-size:12px;color:#999;">
+    Generated automatically by Jenkins CI/CD Pipeline
+  </p>
+ </div>
+</div>
 """
           )
         }
@@ -206,11 +232,3 @@ ${FINAL_REPORT}
     }
   }
 }
-
-
-
-So currently we have this and it is working completely alright.
-
-Now I need to do few improvment in the way we are looking at the data.
-
-Currently it looks pretty boring. I guess we should add more html and make it more good looking, what do you think.
