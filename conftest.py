@@ -1,132 +1,100 @@
-import boto3
-import os
-from datetime import date
+📊 Multi-Tenant Cost Monitoring
 
-ce = boto3.client('ce')
+💰 Grand Total Spend
+$20126.920000000002
+🏢 Tenant: N/A
 
-LIMIT = float(os.environ.get("LIMIT", 1000))
-THRESHOLD = float(os.environ.get("THRESHOLD", 70))
+Client: HSBCINM
 
-TAG_KEY = "sb:cost:tenant"
+Total Spend: $0
 
+Usage: 0%
 
-def get_matching_tenants(prefix, start, end):
-    """Fetch all tenant tag values and filter by prefix"""
-    response = ce.get_tags(
-        TimePeriod={'Start': start, 'End': end},
-        TagKey=TAG_KEY
-    )
+🏢 Tenant: N/A
 
-    all_tags = response.get('Tags', [])
-    print(f"All tenant tags: {all_tags}")
+Client: HSBCMYH
 
-    matched = [t for t in all_tags if t.startswith(prefix)]
+Total Spend: $0
 
-    print(f"Matched tenants for prefix '{prefix}': {matched}")
+Usage: 0%
 
-    return matched
+🏢 Tenant: N/A
 
+Client: LFS
 
-def lambda_handler(event, context):
-    try:
-        # 👇 Pass prefix like "3878909f"
-        tenant_prefix = event.get("tenant_prefix")
+Total Spend: $0
 
-        if not tenant_prefix:
-            raise ValueError("tenant_prefix is required")
+Usage: 0%
 
-        start = date.today().replace(day=1).strftime('%Y-%m-%d')
-        end = date.today().strftime('%Y-%m-%d')
+🏢 Tenant: 1dfb01b8
 
-        print(f"Fetching cost for tenant prefix: {tenant_prefix}")
+Client: FDR
 
-        # 🔍 Step 1: Get all matching tenants
-        tenant_values = get_matching_tenants(tenant_prefix, start, end)
+Total Spend: $0
 
-        if not tenant_values:
-            print("No matching tenants found")
-            return {
-                "statusCode": 200,
-                "body": {
-                    "tenant_prefix": tenant_prefix,
-                    "total_spend": 0,
-                    "usage_percent": 0,
-                    "service_breakdown": {}
-                }
-            }
+Usage: 0%
 
-        # -----------------------------
-        # 1️⃣ TOTAL COST (Filtered tenants)
-        # -----------------------------
-        total_response = ce.get_cost_and_usage(
-            TimePeriod={'Start': start, 'End': end},
-            Granularity='MONTHLY',
-            Metrics=['UnblendedCost'],
-           Filter={
-    "Tags": {
-        "Key": TAG_KEY,
-        "Values": tenant_values
-         }
-         }
-        )
+🏢 Tenant: c1fd79af
 
-        total_amount = float(
-            total_response['ResultsByTime'][0]['Total']['UnblendedCost']['Amount']
-        )
+Client: DEMO
 
-        percent = (total_amount / LIMIT) * 100 if LIMIT > 0 else 0
+Total Spend: $66.0
 
-        # -----------------------------
-        # 2️⃣ SERVICE BREAKDOWN
-        # -----------------------------
-        service_response = ce.get_cost_and_usage(
-            TimePeriod={'Start': start, 'End': end},
-            Granularity='MONTHLY',
-            Metrics=['UnblendedCost'],
-            GroupBy=[
-                {"Type": "DIMENSION", "Key": "SERVICE"}
-            ],
-            Filter={
-                "Tags": {
-                    "Key": TAG_KEY,
-                    "Values": tenant_values
-                }
-            }
-        )
+Usage: 0.33%
 
-        service_costs = {}
+🏢 Tenant: 3878909f
 
-        for group in service_response['ResultsByTime'][0]['Groups']:
-            service_name = group['Keys'][0]
-            cost = float(group['Metrics']['UnblendedCost']['Amount'])
+Client: TDB
 
-            if cost > 0:
-                service_costs[service_name] = round(cost, 2)
+Total Spend: $61.72
 
-        # -----------------------------
-        # 📊 Logs
-        # -----------------------------
-        print("\n=== TENANT SUMMARY ===")
-        print(f"Prefix: {tenant_prefix}")
-        print(f"Matched Tenants: {tenant_values}")
-        print(f"Total Spend: ${round(total_amount, 2)}")
-        print(f"Usage: {percent:.2f}% of ${LIMIT}")
+Usage: 0.31%
 
-        print("\n=== SERVICE BREAKDOWN ===")
-        for svc, cost in service_costs.items():
-            print(f"{svc} → ${cost}")
+🏢 Tenant: 00d1f964
 
-        return {
-            "statusCode": 200,
-            "body": {
-                "tenant_prefix": tenant_prefix,
-                "matched_tenants": tenant_values,
-                "total_spend": round(total_amount, 2),
-                "usage_percent": round(percent, 2),
-                "service_breakdown": service_costs
-            }
-        }
+Client: LCC
 
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        raise
+Total Spend: $171.32
+
+Usage: 0.85%
+
+🏢 Tenant: deb8d834
+
+Client: BCS
+
+Total Spend: $14544.02
+
+Usage: 72.26%
+
+🏢 Tenant: 70368f66
+
+Client: SCE
+
+Total Spend: $1373.93
+
+Usage: 6.83%
+
+🏢 Tenant: e0dce895
+
+Client: NRG
+
+Total Spend: $1889.98
+
+Usage: 9.39%
+
+🏢 Tenant: b6b7ee55
+
+Client: NRGR
+
+Total Spend: $1771.04
+
+Usage: 8.8%
+
+🏢 Tenant: 5c9a2735
+
+Client: CLIENTDEMO
+
+Total Spend: $248.91
+
+Usage: 1.24%
+
