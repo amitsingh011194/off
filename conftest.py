@@ -1,108 +1,294 @@
-📊 Multi-Tenant Cost Monitoring
+roperties([
+    parameters([
+        choice(name: 'CUSTOMER', choices: ['demo','fhc', 'lcc', 'fdr', 'nrg', 'nrgr', 'tdb', 'hsbcinm', 'hsbcmyh', 'sce', 'bcs', 'omf', 'lfs', 'clientdemo'], description: 'Which Customer do you want to deploy'),
+        choice(name: 'ENVIRONMENT', choices: ['dev','uat','prod'], description: 'Which Enviornment you want to deploy to'),
+        booleanParam(name: 'BUILD_JAVA_LAMBDA', defaultValue: false, description: 'Also build the Java lambda - this takes a lot of time'),
+        booleanParam(name: 'RUN_DB_MIGRATION', defaultValue: false, description: 'Set to true to run Flyway'),
+        booleanParam(name: 'RUN_CLI_SCRIPT', defaultValue: false, description: 'Run CLI script - Applicable for ClientDemo, DEMO, LCC, NRG, NRGR, HSBCinm, HSBCmyh Tenants!'),
+        booleanParam(
+        name: 'UPLOAD_NEW_IMAGE',
+        defaultValue: false,
+        description: 'Its not applicable for any tenant currently, please do not select it, Its only for DevOps testing at this moment'
+        ),
+        string(
+        name: 'IMAGE_TAG',
+        defaultValue: '5229',
+        description: 'Its not applicable for any tenant currently, please do not select it, Its only for DevOps testing at this moment'
+       )
+        
+    ])
+])
 
-💰 Grand Total Spend
-$20126.920000000002
-🏢 Tenant: N/A
+pipeline {
+    agent  {
+        label 'cicd' 
+    }
 
-Client: HSBCINM
+    environment {
+        CUSTOMER="${params.CUSTOMER}"
+        ENVIRONMENT="${params.ENVIRONMENT}"
+        GIT_REPO_URL="https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-dgt-paymentor-core-aws-app.git"
+        OIDC_ROLE_NAME="paymentor-oidc-role"
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
 
-Total Spend: $0
+    }
 
-Usage: 0%
+    stages {
+        stage('Auth Check') {
+            when {
+                expression { "${ENVIRONMENT}" != "dev" }
+            }
+            steps {
+                script {
+                    sh """
+                        chmod +x scripts/env-protection.sh && ./scripts/env-protection.sh deploy
+                    """
+                }
+            }
+        }
+       
 
-🏢 Tenant: N/A
+stage('Get customer mapping') {
+    steps {
+        script {
+            // Set job description on Jenkins UI
+            currentBuild.description = "CUSTOMER: ${env.CUSTOMER} \n ENVIRONMENT: ${env.ENVIRONMENT} \n BUILT BY: ${env.BUILD_USER_ID}"
 
-Client: HSBCMYH
+            // Define environment-to-account ID mapping
+            def envAccountMap = [
+                dev: '607436280417',
+                uat: '658960620175',
+                prod: '016795361898'
+            ]
 
-Total Spend: $0
+            def envAccountMapLFS = [
+                dev: '116981803571',
+                uat: '216989139664',
+                prod: '767828744639'
+            ]
 
-Usage: 0%
+            def envAccountMapHSBC = [
+                dev: '088082905288',
+                uat: '793586321398',
+                prod: '501957928506' 
+            ]
 
-🏢 Tenant: N/A
+            def envAccountMapFDR = [
+                dev: '975949451286',
+                uat: '069295248160',
+                prod: '609714460132'
+            ]
 
-Client: LFS
+            // Select the appropriate map based on the CUSTOMER parameter
+            def selectedMap
+            if (params.CUSTOMER == 'lfs') {
+                selectedMap = envAccountMapLFS
+            } else if (params.CUSTOMER == 'hsbcinm' || params.CUSTOMER == 'hsbcmyh') {
+                selectedMap = envAccountMapHSBC
+            } else if (params.CUSTOMER == 'fdr') {
+                selectedMap = envAccountMapFDR
+            } else {
+                selectedMap = envAccountMap
+            }
 
-Total Spend: $0
+            // Get the account ID based on selected ENVIRONMENT
+            env.AWS_ACCOUNT_ID = selectedMap[params.ENVIRONMENT]
 
-Usage: 0%
+            // ✅ NEW: Set AWS region dynamically
+            if (params.CUSTOMER == 'lfs') {
+                env.AWS_REGION = 'ap-southeast-2'
+            } else if (params.CUSTOMER == 'fdr') {
+                env.AWS_REGION = 'ca-central-1'
+            } else {
+                env.AWS_REGION = 'us-east-1'
+            }
 
-🏢 Tenant: 1dfb01b8
+            // IAM Role
+            env.AWS_ROLE_ARN = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
+            
+            // Get TENANT_ENV and TENANT_ID from customer json file
+           env.TENANT_ENV = sh(
+    script: """
+        jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_env' resources/customer-mapping/${CUSTOMER}.json
+    """,
+    returnStdout: true
+).trim()
 
-Client: FDR
+env.TENANT_ID = sh(
+    script: """
+        jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_id' resources/customer-mapping/${CUSTOMER}.json
+    """,
+    returnStdout: true
+).trim()
 
-Total Spend: $0
+            script {
+    env.IMAGE_TAG_FINAL = params.IMAGE_TAG?.trim()
 
-Usage: 0%
+    if (!env.IMAGE_TAG_FINAL) {
+        env.IMAGE_TAG_FINAL = env.BUILD_NUMBER
+    }
 
-🏢 Tenant: c1fd79af
+    echo "Final IMAGE TAG: ${env.IMAGE_TAG_FINAL}"
+}
 
-Client: DEMO
+            // Logs
+            echo "Selected ENVIRONMENT: ${ENVIRONMENT}"
+            echo "Mapped AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID}"
+            echo "AWS_ROLE_ARN: ${AWS_ROLE_ARN}"
+            echo "AWS_REGION: ${AWS_REGION}"
+            echo "TENANT_ID: ${TENANT_ID}"
+            echo "TENANT_ENV: ${TENANT_ENV}"
+        }
+    }
+}
+       stage('Checkout App repo') {
+    steps {
+        script {
+            sh """
+                set -e
 
-Total Spend: $66.0
+                echo "Cloning repo..."
+                git clone ${GIT_REPO_URL}
 
-Usage: 0.33%
+                cd bu-dgt-paymentor-core-aws-app
+                git checkout client/${CUSTOMER}/${ENVIRONMENT}
 
-🏢 Tenant: 3878909f
+                echo "========================================"
+                echo "Workspace inside repo after checkout:"
+                echo "========================================"
+                ls -l
 
-Client: TDB
+                SRC_DIR="devops_handled_lambdas"
+                DEST_DIR="application/lambdas"
 
-Total Spend: $61.72
+                echo "========================================"
+                echo "Checking for \$SRC_DIR at repo root..."
+                echo "========================================"
 
-Usage: 0.31%
+                if [ -d "\${SRC_DIR}" ]; then
+        mkdir -p "\${DEST_DIR}"
+        cp -r "\${SRC_DIR}"/. "\${DEST_DIR}"/
+        rm -rf "\${SRC_DIR}"
+    else
+        echo "Folder '\${SRC_DIR}' not found. Skipping."
+    fi
 
-🏢 Tenant: 00d1f964
-
-Client: LCC
-
-Total Spend: $171.32
-
-Usage: 0.85%
-
-🏢 Tenant: deb8d834
-
-Client: BCS
-
-Total Spend: $14544.02
-
-Usage: 72.26%
-
-🏢 Tenant: 70368f66
-
-Client: SCE
-
-Total Spend: $1373.93
-
-Usage: 6.83%
-
-🏢 Tenant: e0dce895
-
-Client: NRG
-
-Total Spend: $1889.98
-
-Usage: 9.39%
-
-🏢 Tenant: b6b7ee55
-
-Client: NRGR
-
-Total Spend: $1771.04
-
-Usage: 8.8%
-
-🏢 Tenant: 5c9a2735
-
-Client: CLIENTDEMO
-
-Total Spend: $248.91
-
-Usage: 1.24%
-
-so this is how its showing currently...
-It's good but now the service wise cost is not showing up for each tenant. why is that?
+                echo "========================================"
+                echo "Final lambdas directory structure:"
+                echo "========================================"
+                ls -l "\$DEST_DIR" || true
+            """
+        }
+    }
+}
 
 
+stage('ECS Build & Push') {
+    when {
+        expression { 
+            params.UPLOAD_NEW_IMAGE && 
+            params.CUSTOMER == 'lfs' && 
+            !params.IMAGE_TAG?.trim()
+        }
+    }
+    steps {
+        withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+            script {
+                sh """
+                    set -e
+                    cd bu-dgt-paymentor-core-aws-app
 
+                    pwd
+                    ls -l application/ecs/
 
+                    # Login to ECR once ✅
+                    aws ecr get-login-password --region ${AWS_REGION} | \\
+                    docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                """
 
+                // Define image name and folder mapping
+                def images = [
+                    [name: 'voice-processor', folder: 'agai_voice_processor'],
+                    [name: 'voice-assistant', folder: 'agai_voice_assistant'],
+                    [name: 'llm-engine', folder: 'agai-llm-engine']
+                ]
 
+                // Sequential execution 👇
+                images.each { img ->
+                    sh """
+                        set -e
+                        cd bu-dgt-paymentor-core-aws-app
+
+                        if [ -d "application/ecs/${img.folder}" ]; then
+                            echo "Building ECS image: ${img.name}"
+
+                            # Build image
+                            docker build -t agai-${img.name}:${BUILD_NUMBER} application/ecs/${img.folder}
+
+                            # Tag image
+                            docker tag agai-${img.name}:${BUILD_NUMBER} \\
+                            ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/sb-${TENANT_ENV}-${TENANT_ID}-agai-${img.name}:${BUILD_NUMBER}
+
+                            # Push image
+                            docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/sb-${TENANT_ENV}-${TENANT_ID}-agai-${img.name}:${BUILD_NUMBER}
+                        else
+                            echo "Folder application/ecs/${img.folder} not found. Skipping ${img.name}."
+                        fi
+                    """
+                }
+            }
+        }
+    }
+}
+        stage('Build Java lambda') {
+            when {
+                allOf {
+                    expression { currentBuild.result != 'ABORTED' } // Only run if not aborted
+                    expression { params.BUILD_JAVA_LAMBDA }
+                }
+            }
+            steps {
+                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+                    script {
+                        ansiColor('xterm') {
+                            sh """
+                                chmod +x ./scripts/build-java-lambda.sh && ./scripts/build-java-lambda.sh
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+    
+
+        
+      stage('terraform plan') {
+    steps {
+        withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+            script {
+                ansiColor('xterm') {
+
+                    def imageTag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : BUILD_NUMBER
+                    echo "Using image tag: ${imageTag}"
+
+                    sh """
+                        cd bu-dgt-paymentor-core-aws-app/cicd
+                        terraform init -upgrade \
+                          -backend-config="bucket=${AWS_ACCOUNT_ID}-paymentor-tf-state-mgmt" \
+                          -backend-config="key=${TENANT_ENV}/${TENANT_ID}/terraform.tfstate"
+
+                        terraform validate
+
+                        terraform plan -out=tfplan \
+                          -var "customer_id=${TENANT_ID}" \
+                          -var "image_tag=${IMAGE_TAG_FINAL}" \
+                          -var "env_id=${TENANT_ENV}" \
+                          -var "target_env=${ENVIRONMENT}" \
+                          -var-file="tfvars/${ENVIRONMENT}.tfvars"
+                    """
+                }
+            }
+        }
+    }
+}
