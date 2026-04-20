@@ -1,4 +1,5 @@
-roperties([
+
+properties([
     parameters([
         choice(name: 'CUSTOMER', choices: ['demo','fhc', 'lcc', 'fdr', 'nrg', 'nrgr', 'tdb', 'hsbcinm', 'hsbcmyh', 'sce', 'bcs', 'omf', 'lfs', 'clientdemo'], description: 'Which Customer do you want to deploy'),
         choice(name: 'ENVIRONMENT', choices: ['dev','uat','prod'], description: 'Which Enviornment you want to deploy to'),
@@ -13,7 +14,7 @@ roperties([
         string(
         name: 'IMAGE_TAG',
         defaultValue: '5229',
-        description: 'Its not applicable for any tenant currently, please do not select it, Its only for DevOps testing at this moment'
+        description: 'Provide a specific tag to override build number - Only applicable for LFS currently'
        )
         
     ])
@@ -289,6 +290,151 @@ stage('ECS Build & Push') {
                     """
                 }
             }
+        }
+    }
+}
+        stage('Run terraform Apply?') {
+            input {
+                message 'Continue with deploy?'
+                ok 'Approve'
+                submitter "${env.BUILD_USER_ID}"
+            }
+
+            steps {
+                echo "Deployment approved by ${env.BUILD_USER_ID}."
+            }
+        }
+        // stage('Prod Protection') {
+        //     when {
+        //         expression { params.ENVIRONMENT == "prod" }
+        //     }
+        //     input {
+        //         id 'ProductionApproval'
+        //         message 'WARNING: You are about to deploy to PRODUCTION! This cannot be undone. Do you want to proceed?'
+        //         ok 'Yes, Deploy to Production'
+        //         submitterParameter 'approverId'
+        //         parameters {
+        //             booleanParam(name: 'CONFIRM_DEPLOY', defaultValue: false, description: 'Check this box to confirm deployment to production')
+        //         }
+        //     }
+        //     steps {
+        //         script {
+        //             if (env.CONFIRM_DEPLOY != "true") {
+        //                 error "❌ Deployment aborted: CONFIRM_DEPLOY is not set to 'true'."
+        //             }
+        //         }
+        //     }
+        // }
+       stage('terraform apply') {
+    steps {
+        withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+            script {
+                ansiColor('xterm') {
+
+                    def imageTag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : BUILD_NUMBER
+
+                    sh """
+                        cd bu-dgt-paymentor-core-aws-app/cicd
+                        terraform apply -input=false -auto-approve \
+                          -var "customer_id=${TENANT_ID}" \
+                          -var "image_tag=${IMAGE_TAG_FINAL}" \
+                          -var "env_id=${TENANT_ENV}" \
+                          -var "target_env=${ENVIRONMENT}" \
+                          -var-file="tfvars/${ENVIRONMENT}.tfvars"
+                    """
+                }
+            }
+        }
+    }
+}
+
+        stage('Configure Pinpoint Event Destination') {
+  when { expression { params.RUN_CLI_SCRIPT } }
+  steps {
+    withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+      script {
+        def configSetName = "sb-${TENANT_ENV}-${TENANT_ID}-sms-config"
+        def eventDestName = "sb-${TENANT_ENV}-${TENANT_ID}-sms-event-destination"
+        def firehoseName  = "sb-${TENANT_ENV}-${TENANT_ID}-pinpoint-sms-to-s3"
+        def roleArn       = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/sb-${TENANT_ENV}-${TENANT_ID}-pinpoint-event-to-firehose-role"
+
+        echo "Fetching Firehose ARN for stream: ${firehoseName}"
+        def firehoseArn = sh(
+          script: "aws firehose describe-delivery-stream --delivery-stream-name ${firehoseName} --query 'DeliveryStreamDescription.DeliveryStreamARN' --output text",
+          returnStdout: true
+        ).trim()
+
+        echo "Using Configuration Set: ${configSetName}"
+        echo "Using Event Destination Name: ${eventDestName}"
+        echo "Using Role ARN: ${roleArn}"
+        echo "Using Firehose ARN: ${firehoseArn}"
+
+        // Ensure the stream is fully ready (optional)
+        sh "sleep 10"
+
+        // Write destination JSON to avoid escape issues
+        writeFile file: 'firehose-dest.json', text: """{
+          "DeliveryStreamArn": "${firehoseArn}",
+          "IamRoleArn": "${roleArn}"
+        }"""
+
+        // Create (or re-create) the destination
+        sh """
+  set -e
+
+  echo "Checking if event destination exists..."
+  EXISTS=\$(aws pinpoint-sms-voice-v2 describe-configuration-sets \
+    --configuration-set-names ${configSetName} \
+    --query "length(ConfigurationSets[0].EventDestinations[?EventDestinationName=='${eventDestName}'])" \
+    --output text)
+
+  if [ "\$EXISTS" = "0" ] || [ "\$EXISTS" = "None" ]; then
+    echo "Event destination not found; creating..."
+    aws pinpoint-sms-voice-v2 create-event-destination \
+      --configuration-set-name ${configSetName} \
+      --event-destination-name ${eventDestName} \
+      --matching-event-types TEXT_ALL \
+      --kinesis-firehose-destination file://firehose-dest.json \
+      --cli-binary-format raw-in-base64-out
+  else
+    echo "Event destination exists; updating..."
+    aws pinpoint-sms-voice-v2 update-event-destination \
+      --configuration-set-name ${configSetName} \
+      --event-destination-name ${eventDestName} \
+      --matching-event-types TEXT_ALL \
+      --kinesis-firehose-destination file://firehose-dest.json \
+      --enabled
+  fi
+"""
+      }
+    }
+  }
+}
+
+
+
+
+        stage('flyway deployment') {
+            when {
+                allOf {
+                    expression { currentBuild.result != 'ABORTED' } // Only run if not aborted
+                    expression { params.RUN_DB_MIGRATION }
+                }
+            }
+            steps {
+                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+                    script {
+                        sh """
+                        chmod +x ./scripts/flyway.sh && ./scripts/flyway.sh
+                        """
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            deleteDir()
         }
     }
 }
