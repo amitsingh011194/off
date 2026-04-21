@@ -1,321 +1,247 @@
-properties([
-  parameters([
-    choice(name: 'ENVIRONMENT', choices: ['prod','uat','dev']),
-    string(name: 'AWS_REGION', defaultValue: 'us-east-1'),
-    booleanParam(name: 'RUN_ALL', defaultValue: true, description: 'Run for all customers (cron mode)')
-  ])
-])
+Total Spend: $28016.18
 
-pipeline {
-  agent { label 'cicd' }
+Tenant: 00d1f964
 
-  triggers {
-    cron('H H */7 * *')
-  }
+Client: LCC
 
-  environment {
-    OIDC_ROLE_NAME   = "paymentor-oidc-role"
-    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com"
-  }
+Environment: PROD
 
-  stages {
+Total Spend: $214.84
 
-    /* ================================================= */
-    stage('Initialize Context') {
-    /* ================================================= */
-      steps {
-        script {
-          GRAND_TOTAL   = 0
-          FINAL_REPORT  = ""
-          tenantResults = [:]
+Usage: 21.48%
 
-          envAccountMap = [
-            dev  : '607436280417',
-            uat  : '658960620175',
-            prod : '016795361898'
-          ]
+Service	Cost
+AWS Key Management Service	$0.68
+AWS Lambda	$0.01
+AWS Secrets Manager	$1.36
+AWS Transfer Family	$144.0
+Amazon CloudFront	$0.0
+Amazon DynamoDB	$0.0
+Amazon Elastic Container Service	$16.23
+Amazon Elastic Load Balancing	$43.42
+Amazon Relational Database Service	$5.34
+Amazon Route 53	$2.0
+Amazon Simple Notification Service	$0.01
+Amazon Simple Queue Service	$1.78
+Amazon Simple Storage Service	$0.02
+AmazonCloudWatch	$0.0
+Tenant: e0dce895
 
-          envAccountMapLFS = [
-            dev  : '116981803571',
-            uat  : '216989139664',
-            prod : '767828744639'
-          ]
+Client: NRG
 
-          envAccountMapHSBC = [
-            dev  : '088082905288',
-            uat  : '793586321398',
-            prod : '501957928506'
-          ]
-          envCodeMap = [
-            prod: 'prod3',
-            dev : 'dev14',
-            uat : 'utp2'
-          ]
+Environment: PROD
 
-          TARGETS = [
-            [env:'prod', customer:'tdb'],
-            [env:'prod', customer:'lcc'],
-            [env:'prod', customer:'nrg'],
-            [env:'prod', customer:'demo'],
-            [env:'prod', customer:'bcs'],   
-            [env:'prod', customer:'sce'],
-            [env:'prod', customer:'nrgr'],
-            [env:'prod', customer:'clientdemo']
-          ]
+Total Spend: $2348.18
 
-          executionList = params.RUN_ALL ?
-            TARGETS :
-            [[env: params.ENVIRONMENT, customer: params.CUSTOMER]]
-        }
-      }
-    }
+Usage: 234.82%
 
-    /* ================================================= */
-    stage('Process Tenants (Parallel)') {
-    /* ================================================= */
-      steps {
-        script {
+Service	Cost
+AWS End User Messaging	$1623.63
+AWS Key Management Service	$1.71
+AWS Lambda	$2.15
+AWS Secrets Manager	$1.23
+AWS Transfer Family	$144.0
+Amazon API Gateway	$0.05
+Amazon CloudFront	$0.96
+Amazon Elastic Container Service	$16.23
+Amazon Elastic Load Balancing	$34.36
+Amazon Kinesis Firehose	$0.03
+Amazon Lex	$4.57
+Amazon Relational Database Service	$482.36
+Amazon Route 53	$4.0
+Amazon SageMaker	$24.47
+Amazon Simple Email Service	$4.02
+Amazon Simple Notification Service	$0.02
+Amazon Simple Queue Service	$3.45
+Amazon Simple Storage Service	$0.73
+AmazonCloudWatch	$0.22
+Tenant: 3878909f
 
-          def branches = [:]
+Client: TDB
 
-          executionList.each { t ->
+Environment: PROD
 
-            def CUSTOMER = t.customer
-            def ENV_NAME = t.env
+Total Spend: $76.71
 
-            branches["Tenant | ${CUSTOMER}"] = {
+Usage: 7.67%
 
-              def tenantTotal  = 0
-              def tenantReport = ""
+Service	Cost
+AWS End User Messaging	$1.33
+AWS Key Management Service	$0.69
+AWS Lambda	$0.0
+AWS Secrets Manager	$1.36
+Amazon CloudFront	$0.88
+Amazon DynamoDB	$0.0
+Amazon Elastic Container Service	$16.24
+Amazon Elastic Load Balancing	$45.27
+Amazon Relational Database Service	$5.35
+Amazon Route 53	$4.0
+Amazon Simple Notification Service	$0.01
+Amazon Simple Queue Service	$1.56
+Amazon Simple Storage Service	$0.03
+AmazonCloudWatch	$0.0
+Tenant: 1dfb01b8
 
-              try {
-                echo "Processing ${CUSTOMER} - ${ENV_NAME}"
+Client: FDR
 
-                /* ---- Mapping ---- */
-                def mapFile = "resources/customer-mapping/${CUSTOMER}.json"
-                if (!fileExists(mapFile)) return
+Environment: PROD
 
-                def mapping = readJSON file: mapFile
-                if (!mapping.containsKey(ENV_NAME)) return
+Total Spend: $0
 
-                def TENANT_SHORT = mapping[ENV_NAME].tenant_id
+Usage: 0%
 
-                /* ---- Account selection ---- */
-                def selectedMap =
-                  (CUSTOMER == 'lfs') ? envAccountMapLFS :
-                  (CUSTOMER in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
-                  envAccountMap
+Service	Cost
+Tenant: 70368f66
 
-                def ACCOUNT_ID = selectedMap[ENV_NAME]
-                def ROLE_ARN  = "arn:aws:iam::${ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
-               def ENV_CODE = envCodeMap[ENV_NAME]
-def TENANT_GROUP = "3878909f"
+Client: SCE
 
-def LAMBDA = "sb-${ENV_CODE}-${TENANT_GROUP}-service_limit_lambdas"
-                def payload = "payload-${CUSTOMER}.json"
-                def output  = "output-${CUSTOMER}.json"
-                def meta    = "meta-${CUSTOMER}.json"
-                def logs    = "logs-${CUSTOMER}.txt"
+Environment: PROD
 
-                withAWS(role: ROLE_ARN, useNode: true) {
-                  sh """
-                    set -e
-                    printf '{"tenant_prefix":"%s"}' "${TENANT_SHORT}" > ${payload}
+Total Spend: $1590.68
 
-                    aws lambda invoke \
-                      --function-name ${LAMBDA} \
-                      --region ${AWS_REGION} \
-                      --cli-binary-format raw-in-base64-out \
-                      --payload file://${payload} \
-                      --log-type Tail \
-                      ${output} > ${meta}
+Usage: 159.07%
 
-                    LOG_RESULT=\$(jq -r '.LogResult' ${meta})
-                    [ "\$LOG_RESULT" != "null" ] && echo "\$LOG_RESULT" | base64 --decode > ${logs}
-                  """
-                }
+Service	Cost
+AWS End User Messaging	$853.49
+AWS Key Management Service	$1.46
+AWS Lambda	$3.56
+AWS Secrets Manager	$1.62
+AWS Transfer Family	$144.0
+Amazon API Gateway	$0.03
+Amazon CloudFront	$0.05
+Amazon Elastic Container Service	$16.07
+Amazon Elastic Load Balancing	$43.3
+Amazon Kinesis Firehose	$0.01
+Amazon Lex	$1.81
+Amazon Relational Database Service	$496.05
+Amazon SageMaker	$24.47
+Amazon Simple Email Service	$1.92
+Amazon Simple Notification Service	$0.04
+Amazon Simple Queue Service	$2.0
+Amazon Simple Storage Service	$0.64
+AmazonCloudWatch	$0.17
+Tenant: c1fd79af
 
-                if (!fileExists(output)) return
+Client: DEMO
 
-                def resp = readJSON file: output
-                def BODY = (resp.body instanceof String) ? readJSON(text: resp.body) : resp.body
+Environment: PROD
 
-                tenantTotal = BODY.total_spend ?: 0
-                def USAGE   = BODY.usage_percent ?: 0
-                def TENANT  = BODY.tenant ?: TENANT_SHORT
+Total Spend: $83.74
 
-                def serviceTable = ""
+Usage: 8.37%
 
-                if (fileExists(logs)) {
-                  readFile(logs).split('\n').each { l ->
-                    if (l.contains('→ $')) {
-                      def p = l.split('→')
-                      serviceTable += """
-<tr>
-  <td>${p[0].trim()}</td>
-  <td><b>\$${p[1].replace('$','').trim()}</b></td>
-</tr>
-"""
-                    }
-                  }
-                }
+Service	Cost
+AWS Key Management Service	$1.39
+AWS Lambda	$0.06
+AWS Secrets Manager	$0.27
+Amazon API Gateway	$0.04
+Amazon CloudFront	$0.01
+Amazon Elastic Load Balancing	$21.65
+Amazon Relational Database Service	$58.88
+Amazon Simple Notification Service	$0.01
+Amazon Simple Queue Service	$1.41
+Amazon Simple Storage Service	$0.01
+AmazonCloudWatch	$0.01
+Tenant: b6b7ee55
 
-                tenantReport = """
-<hr/>
-<h3>Tenant: ${TENANT}</h3>
-<p><b>Client:</b> ${CUSTOMER.toUpperCase()}</p>
-<p><b>Environment:</b> ${ENV_NAME.toUpperCase()}</p>
-<p><b>Total Spend:</b> \$${tenantTotal}</p>
-<p><b>Usage:</b> ${USAGE}%</p>
+Client: NRGR
 
-<table border="1" cellpadding="6" cellspacing="0">
-<tr><th>Service</th><th>Cost</th></tr>
-${serviceTable}
-</table>
-"""
-              }
-              catch (err) {
-                echo "Failed for ${CUSTOMER}: ${err}"
-              }
+Environment: PROD
 
-              tenantResults[CUSTOMER] = [
-                total : tenantTotal,
-                html  : tenantReport
-              ]
-            }
-          }
+Total Spend: $2213.5
 
-          parallel branches
-        }
-      }
-    }
+Usage: 221.35%
 
-    /* ================================================= */
-stage('Aggregate & Send Email') {
-  steps {
-    script {
+Service	Cost
+AWS End User Messaging	$1496.32
+AWS Key Management Service	$1.5
+AWS Lambda	$1.51
+AWS Secrets Manager	$1.13
+AWS Transfer Family	$144.0
+Amazon API Gateway	$0.04
+Amazon CloudFront	$0.92
+Amazon DynamoDB	$0.0
+Amazon Elastic Container Service	$16.23
+Amazon Elastic Load Balancing	$45.36
+Amazon Kinesis Firehose	$0.02
+Amazon Lex	$2.63
+Amazon Relational Database Service	$467.82
+Amazon Route 53	$4.0
+Amazon SageMaker	$24.47
+Amazon Simple Email Service	$3.48
+Amazon Simple Notification Service	$0.02
+Amazon Simple Queue Service	$3.36
+Amazon Simple Storage Service	$0.52
+AmazonCloudWatch	$0.17
+Tenant: 1dfb01b8
 
-      /* ============================= */
-      /* 1️⃣ Calculate Grand Total     */
-      /* ============================= */
-      GRAND_TOTAL = 0
-      tenantResults.each { k, v ->
-        if (v != null) {
-          GRAND_TOTAL += (v.total ?: 0)
-        }
-      }
+Client: FDR
 
-      /* ============================= */
-      /* 2️⃣ Convert Map → List        */
-      /* ============================= */
-      def tenantList = []
+Environment: UAT
 
-      tenantResults.each { k, v ->
-        if (v != null) {
-          tenantList.add([
-            customer: k,
-            total   : (v.total ?: 0),
-            html    : v.html ?: ""
-          ])
-        } else {
-          echo "Skipping ${k} — no data"
-        }
-      }
+Total Spend: $0
 
-      /* ============================= */
-      /* 3️⃣ Sort by total DESC        */
-      /* ============================= */
-      tenantList.sort { -it.total }
+Usage: 0%
 
-      /* ============================= */
-      /* 4️⃣ Build Final Report        */
-      /* ============================= */
-      FINAL_REPORT = ""
+Service	Cost
+Tenant: 3878909f
 
-      tenantList.each { t ->
+Client: TDB
 
-        def tenantTotal = t.total
-        def customer    = t.customer
+Environment: UAT
 
-        def usagePercent = 0
-        if (GRAND_TOTAL > 0) {
-          usagePercent = (tenantTotal * 100.0) / GRAND_TOTAL
-          usagePercent = Math.round(usagePercent * 100) / 100
-        }
+Total Spend: $72.09
 
-        def html = t.html
+Usage: 7.21%
 
-        // Extract service table
-       def serviceTableMatch = (html =~ /(?s)<table.*?<\/table>/)
-def serviceTable = serviceTableMatch ? serviceTableMatch[0] : ""
+Service	Cost
+AWS Key Management Service	$0.68
+AWS Lambda	$0.0
+AWS Secrets Manager	$1.63
+Amazon CloudFront	$0.88
+Amazon DynamoDB	$0.0
+Amazon Elastic Container Service	$16.39
+Amazon Elastic Load Balancing	$44.19
+Amazon Relational Database Service	$2.74
+Amazon Route 53	$4.0
+Amazon Simple Notification Service	$0.01
+Amazon Simple Queue Service	$1.56
+Amazon Simple Storage Service	$0.02
+AmazonCloudWatch	$0.0
+Tenant: 085d6a99
 
-        // Extract tenant name
-       def tenantMatch = (html =~ /<h3>Tenant: (.*?)<\/h3>/)
-def tenantName = tenantMatch ? tenantMatch[0][1] : "N/A"
+Client: NRG
 
-        /* ============================= */
-        /* 🎨 Card UI                   */
-        /* ============================= */
-        FINAL_REPORT += """
-<div style="border:1px solid #e0e0e0;border-radius:10px;padding:15px;margin-bottom:20px;background:#fafafa;">
+Environment: UAT
 
-  <h3>🏢 Tenant: ${tenantName}</h3>
+Total Spend: $259.17
 
-  <p><b>Client:</b> ${customer.toUpperCase()}</p>
-  <p><b>Total Spend:</b> <span style="color:#d9534f;font-weight:bold;">\$${tenantTotal}</span></p>
+Usage: 25.92%
 
-  <!-- Usage Bar -->
-  <div style="background:#e9ecef;border-radius:5px;height:12px;">
-    <div style="width:${usagePercent}%;background:#28a745;height:12px;"></div>
-  </div>
-  <p style="font-size:12px;">Usage: <b>${usagePercent}%</b></p>
+Service	Cost
+AWS End User Messaging	$4.67
+AWS Key Management Service	$0.75
+AWS Lambda	$0.42
+AWS Secrets Manager	$1.11
+AWS Transfer Family	$144.0
+Amazon API Gateway	$0.0
+Amazon CloudFront	$0.89
+Amazon DynamoDB	$0.0
+Amazon Elastic Container Service	$11.89
+Amazon Elastic Load Balancing	$34.49
+Amazon Kinesis Firehose	$0.0
+Amazon Lex	$0.0
+Amazon Relational Database Service	$30.62
+Amazon Route 53	$3.83
+Amazon SageMaker	$24.47
+Amazon Simple Email Service	$0.0
+Amazon Simple Notification Service	$0.01
+Amazon Simple Queue Service	$1.91
+Amazon Simple Storage Service	$0.08
+AmazonCloudWatch	$0.01
 
-  <div style="margin-top:10px;">
-    ${serviceTable}
-  </div>
 
-</div>
-"""
-      }
 
-      /* ============================= */
-      /* 5️⃣ Send Email                */
-      /* ============================= */
-      emailext(
-        to: EMAIL_RECIPIENTS,
-        subject: "📊 Consolidated Cost Report",
-        mimeType: 'text/html',
-        body: """
-<div style="font-family:Arial;background:#f4f6f8;padding:20px;">
-  <div style="max-width:900px;margin:auto;background:#fff;padding:25px;border-radius:10px;">
+It works but order is a bit messy, lets generate three different emails each for dev, uat and PROD... also keep the graphics in like it was there in the original jenkins file I sent you... 
 
-    <h2>📊 Multi-Tenant Cost Monitoring</h2>
-
-    <div style="background:#fff3cd;border:1px solid #ffeeba;padding:15px;border-radius:8px;margin:20px 0;">
-      <div>💰 Grand Total Spend</div>
-      <div style="font-size:30px;font-weight:bold;color:#a94442;">
-        \$${GRAND_TOTAL}
-      </div>
-    </div>
-
-    ${FINAL_REPORT}
-
-    <p style="font-size:12px;color:#999;text-align:center;">
-      Generated automatically by Jenkins CI/CD Pipeline
-    </p>
-
-  </div>
-</div>
-"""
-      )
-    }
-  }
-}
-  }
-
-  post {
-    always {
-      deleteDir()
-    }
-  }
-}
+Please rewrite the jenkins file with these changes
