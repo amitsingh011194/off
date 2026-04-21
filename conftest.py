@@ -1,3 +1,8 @@
+So we can remove the deployment part as of now. I guess that can still be handled through the original pipeline.  and this new pipeline can be used for any the promoting part.
+
+
+here's my original pipeline by the way, just for your reference:
+
 
 properties([
     parameters([
@@ -13,7 +18,7 @@ properties([
         ),
         string(
         name: 'IMAGE_TAG',
-        defaultValue: '5229',
+        defaultValue: '',
         description: 'Provide a specific tag to override build number - Only applicable for LFS currently'
        )
         
@@ -52,10 +57,10 @@ pipeline {
 stage('Get customer mapping') {
     steps {
         script {
-            // Set job description on Jenkins UI
+            // Set job description
             currentBuild.description = "CUSTOMER: ${env.CUSTOMER} \n ENVIRONMENT: ${env.ENVIRONMENT} \n BUILT BY: ${env.BUILD_USER_ID}"
 
-            // Define environment-to-account ID mapping
+            // Account mappings
             def envAccountMap = [
                 dev: '607436280417',
                 uat: '658960620175',
@@ -80,7 +85,7 @@ stage('Get customer mapping') {
                 prod: '609714460132'
             ]
 
-            // Select the appropriate map based on the CUSTOMER parameter
+            // Select account map
             def selectedMap
             if (params.CUSTOMER == 'lfs') {
                 selectedMap = envAccountMapLFS
@@ -92,10 +97,9 @@ stage('Get customer mapping') {
                 selectedMap = envAccountMap
             }
 
-            // Get the account ID based on selected ENVIRONMENT
             env.AWS_ACCOUNT_ID = selectedMap[params.ENVIRONMENT]
 
-            // ✅ NEW: Set AWS region dynamically
+            // Region selection
             if (params.CUSTOMER == 'lfs') {
                 env.AWS_REGION = 'ap-southeast-2'
             } else if (params.CUSTOMER == 'fdr') {
@@ -106,31 +110,57 @@ stage('Get customer mapping') {
 
             // IAM Role
             env.AWS_ROLE_ARN = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
-            
-            // Get TENANT_ENV and TENANT_ID from customer json file
-           env.TENANT_ENV = sh(
-    script: """
-        jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_env' resources/customer-mapping/${CUSTOMER}.json
-    """,
-    returnStdout: true
-).trim()
 
-env.TENANT_ID = sh(
-    script: """
-        jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_id' resources/customer-mapping/${CUSTOMER}.json
-    """,
-    returnStdout: true
-).trim()
+            // Tenant mapping
+            env.TENANT_ENV = sh(
+                script: """
+                    jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_env' resources/customer-mapping/${CUSTOMER}.json
+                """,
+                returnStdout: true
+            ).trim()
 
-            script {
-    env.IMAGE_TAG_FINAL = params.IMAGE_TAG?.trim()
+            env.TENANT_ID = sh(
+                script: """
+                    jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_id' resources/customer-mapping/${CUSTOMER}.json
+                """,
+                returnStdout: true
+            ).trim()
 
-    if (!env.IMAGE_TAG_FINAL) {
-        env.IMAGE_TAG_FINAL = env.BUILD_NUMBER
-    }
+            // 🔥 IMAGE TAG RESOLUTION (FINAL SAFE VERSION)
+            if (params.UPLOAD_NEW_IMAGE) {
+                env.IMAGE_TAG_FINAL = env.BUILD_NUMBER
+                echo "Using NEW image tag (build number): ${env.IMAGE_TAG_FINAL}"
 
-    echo "Final IMAGE TAG: ${env.IMAGE_TAG_FINAL}"
-}
+            } else if (params.IMAGE_TAG?.trim()) {
+                env.IMAGE_TAG_FINAL = params.IMAGE_TAG
+                echo "Using PROVIDED image tag: ${env.IMAGE_TAG_FINAL}"
+
+            } else {
+                echo "Attempting to fetch latest image tag from ECR..."
+
+                def fetchedTag = ""
+
+                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+                    fetchedTag = sh(
+                        script: """
+                            aws ecr describe-images \
+                              --repository-name sb-${TENANT_ENV}-${TENANT_ID}-agai-voice-processor \
+                              --region ${AWS_REGION} \
+                              --query 'sort_by(imageDetails[?imageTags!=null],& imagePushedAt)[-1].imageTags[0]' \
+                              --output text || true
+                        """,
+                        returnStdout: true
+                    ).trim()
+                }
+
+                if (!fetchedTag || fetchedTag == "None") {
+                    echo "⚠️ ECR repo not found or no images exist. Falling back to BUILD_NUMBER"
+                    env.IMAGE_TAG_FINAL = env.BUILD_NUMBER
+                } else {
+                    env.IMAGE_TAG_FINAL = fetchedTag
+                    echo "Using LATEST ECR image tag: ${env.IMAGE_TAG_FINAL}"
+                }
+            }
 
             // Logs
             echo "Selected ENVIRONMENT: ${ENVIRONMENT}"
@@ -139,6 +169,7 @@ env.TENANT_ID = sh(
             echo "AWS_REGION: ${AWS_REGION}"
             echo "TENANT_ID: ${TENANT_ID}"
             echo "TENANT_ENV: ${TENANT_ENV}"
+            echo "FINAL IMAGE TAG: ${IMAGE_TAG_FINAL}"
         }
     }
 }
@@ -264,14 +295,13 @@ stage('ECS Build & Push') {
     
 
         
-      stage('terraform plan') {
+    stage('terraform plan') {
     steps {
         withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
             script {
                 ansiColor('xterm') {
 
-                    def imageTag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : BUILD_NUMBER
-                    echo "Using image tag: ${imageTag}"
+                    echo "Using FINAL image tag: ${IMAGE_TAG_FINAL}"
 
                     sh """
                         cd bu-dgt-paymentor-core-aws-app/cicd
@@ -325,13 +355,13 @@ stage('ECS Build & Push') {
         //         }
         //     }
         // }
-       stage('terraform apply') {
+      stage('terraform apply') {
     steps {
         withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
             script {
                 ansiColor('xterm') {
 
-                    def imageTag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : BUILD_NUMBER
+                    echo "Applying with IMAGE TAG: ${IMAGE_TAG_FINAL}"
 
                     sh """
                         cd bu-dgt-paymentor-core-aws-app/cicd
