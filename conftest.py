@@ -1,470 +1,344 @@
-So we can remove the deployment part as of now. I guess that can still be handled through the original pipeline.  and this new pipeline can be used for any the promoting part.
-
-
-here's my original pipeline by the way, just for your reference:
-
-
 properties([
-    parameters([
-        choice(name: 'CUSTOMER', choices: ['demo','fhc', 'lcc', 'fdr', 'nrg', 'nrgr', 'tdb', 'hsbcinm', 'hsbcmyh', 'sce', 'bcs', 'omf', 'lfs', 'clientdemo'], description: 'Which Customer do you want to deploy'),
-        choice(name: 'ENVIRONMENT', choices: ['dev','uat','prod'], description: 'Which Enviornment you want to deploy to'),
-        booleanParam(name: 'BUILD_JAVA_LAMBDA', defaultValue: false, description: 'Also build the Java lambda - this takes a lot of time'),
-        booleanParam(name: 'RUN_DB_MIGRATION', defaultValue: false, description: 'Set to true to run Flyway'),
-        booleanParam(name: 'RUN_CLI_SCRIPT', defaultValue: false, description: 'Run CLI script - Applicable for ClientDemo, DEMO, LCC, NRG, NRGR, HSBCinm, HSBCmyh Tenants!'),
-        booleanParam(
-        name: 'UPLOAD_NEW_IMAGE',
-        defaultValue: false,
-        description: 'Its not applicable for any tenant currently, please do not select it, Its only for DevOps testing at this moment'
-        ),
-        string(
-        name: 'IMAGE_TAG',
-        defaultValue: '',
-        description: 'Provide a specific tag to override build number - Only applicable for LFS currently'
-       )
-        
-    ])
+  parameters([
+    choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','nrgr','lfs','clientdemo']),
+    choice(name: 'ENVIRONMENT', choices: ['prod','uat','dev']),
+    string(name: 'AWS_REGION', defaultValue: 'us-east-1'),
+    booleanParam(name: 'RUN_ALL', defaultValue: true, description: 'Run for all customers (cron mode)')
+  ])
 ])
 
 pipeline {
-    agent  {
-        label 'cicd' 
-    }
+  agent { label 'cicd' }
 
-    environment {
-        CUSTOMER="${params.CUSTOMER}"
-        ENVIRONMENT="${params.ENVIRONMENT}"
-        GIT_REPO_URL="https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-dgt-paymentor-core-aws-app.git"
-        OIDC_ROLE_NAME="paymentor-oidc-role"
-        IMAGE_TAG = "${env.BUILD_NUMBER}"
+  triggers {
+    cron('H H */7 * *')
+  }
 
-    }
+  environment {
+    OIDC_ROLE_NAME   = "paymentor-oidc-role"
+    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com"
+  }
 
-    stages {
-        stage('Auth Check') {
-            when {
-                expression { "${ENVIRONMENT}" != "dev" }
-            }
-            steps {
-                script {
-                    sh """
-                        chmod +x scripts/env-protection.sh && ./scripts/env-protection.sh deploy
-                    """
-                }
-            }
-        }
-       
+  stages {
 
-stage('Get customer mapping') {
-    steps {
+    /* ================================================= */
+    stage('Initialize Context') {
+    /* ================================================= */
+      steps {
         script {
-            // Set job description
-            currentBuild.description = "CUSTOMER: ${env.CUSTOMER} \n ENVIRONMENT: ${env.ENVIRONMENT} \n BUILT BY: ${env.BUILD_USER_ID}"
+          GRAND_TOTAL   = 0
+          FINAL_REPORT  = ""
+          tenantResults = [:]
 
-            // Account mappings
-            def envAccountMap = [
-                dev: '607436280417',
-                uat: '658960620175',
-                prod: '016795361898'
-            ]
+          envAccountMap = [
+            dev  : '607436280417',
+            uat  : '658960620175',
+            prod : '016795361898'
+          ]
 
-            def envAccountMapLFS = [
-                dev: '116981803571',
-                uat: '216989139664',
-                prod: '767828744639'
-            ]
+          envAccountMapLFS = [
+            dev  : '116981803571',
+            uat  : '216989139664',
+            prod : '767828744639'
+          ]
 
-            def envAccountMapHSBC = [
-                dev: '088082905288',
-                uat: '793586321398',
-                prod: '501957928506' 
-            ]
+          envAccountMapHSBC = [
+            dev  : '088082905288',
+            uat  : '793586321398',
+            prod : '501957928506'
+          ]
 
-            def envAccountMapFDR = [
-                dev: '975949451286',
-                uat: '069295248160',
-                prod: '609714460132'
-            ]
+          TARGETS = [
+            [env:'prod', customer:'tdb'],
+            [env:'prod', customer:'lcc'],
+            [env:'prod', customer:'fdr'],
+            [env:'prod', customer:'nrg'],
+            [env:'prod', customer:'demo'],
+            [env:'prod', customer:'bcs'],
+            [env:'prod', customer:'hsbcinm'],
+            [env:'prod', customer:'hsbcmyh'],
+            [env:'prod', customer:'sce'],
+            [env:'prod', customer:'nrgr'],
+            [env:'prod', customer:'lfs'],
+            [env:'prod', customer:'clientdemo']
+          ]
 
-            // Select account map
-            def selectedMap
-            if (params.CUSTOMER == 'lfs') {
-                selectedMap = envAccountMapLFS
-            } else if (params.CUSTOMER == 'hsbcinm' || params.CUSTOMER == 'hsbcmyh') {
-                selectedMap = envAccountMapHSBC
-            } else if (params.CUSTOMER == 'fdr') {
-                selectedMap = envAccountMapFDR
-            } else {
-                selectedMap = envAccountMap
-            }
-
-            env.AWS_ACCOUNT_ID = selectedMap[params.ENVIRONMENT]
-
-            // Region selection
-            if (params.CUSTOMER == 'lfs') {
-                env.AWS_REGION = 'ap-southeast-2'
-            } else if (params.CUSTOMER == 'fdr') {
-                env.AWS_REGION = 'ca-central-1'
-            } else {
-                env.AWS_REGION = 'us-east-1'
-            }
-
-            // IAM Role
-            env.AWS_ROLE_ARN = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
-
-            // Tenant mapping
-            env.TENANT_ENV = sh(
-                script: """
-                    jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_env' resources/customer-mapping/${CUSTOMER}.json
-                """,
-                returnStdout: true
-            ).trim()
-
-            env.TENANT_ID = sh(
-                script: """
-                    jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_id' resources/customer-mapping/${CUSTOMER}.json
-                """,
-                returnStdout: true
-            ).trim()
-
-            // 🔥 IMAGE TAG RESOLUTION (FINAL SAFE VERSION)
-            if (params.UPLOAD_NEW_IMAGE) {
-                env.IMAGE_TAG_FINAL = env.BUILD_NUMBER
-                echo "Using NEW image tag (build number): ${env.IMAGE_TAG_FINAL}"
-
-            } else if (params.IMAGE_TAG?.trim()) {
-                env.IMAGE_TAG_FINAL = params.IMAGE_TAG
-                echo "Using PROVIDED image tag: ${env.IMAGE_TAG_FINAL}"
-
-            } else {
-                echo "Attempting to fetch latest image tag from ECR..."
-
-                def fetchedTag = ""
-
-                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-                    fetchedTag = sh(
-                        script: """
-                            aws ecr describe-images \
-                              --repository-name sb-${TENANT_ENV}-${TENANT_ID}-agai-voice-processor \
-                              --region ${AWS_REGION} \
-                              --query 'sort_by(imageDetails[?imageTags!=null],& imagePushedAt)[-1].imageTags[0]' \
-                              --output text || true
-                        """,
-                        returnStdout: true
-                    ).trim()
-                }
-
-                if (!fetchedTag || fetchedTag == "None") {
-                    echo "⚠️ ECR repo not found or no images exist. Falling back to BUILD_NUMBER"
-                    env.IMAGE_TAG_FINAL = env.BUILD_NUMBER
-                } else {
-                    env.IMAGE_TAG_FINAL = fetchedTag
-                    echo "Using LATEST ECR image tag: ${env.IMAGE_TAG_FINAL}"
-                }
-            }
-
-            // Logs
-            echo "Selected ENVIRONMENT: ${ENVIRONMENT}"
-            echo "Mapped AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID}"
-            echo "AWS_ROLE_ARN: ${AWS_ROLE_ARN}"
-            echo "AWS_REGION: ${AWS_REGION}"
-            echo "TENANT_ID: ${TENANT_ID}"
-            echo "TENANT_ENV: ${TENANT_ENV}"
-            echo "FINAL IMAGE TAG: ${IMAGE_TAG_FINAL}"
+          executionList = params.RUN_ALL ?
+            TARGETS :
+            [[env: params.ENVIRONMENT, customer: params.CUSTOMER]]
         }
+      }
     }
-}
-       stage('Checkout App repo') {
-    steps {
+
+    /* ================================================= */
+    stage('Process Tenants (Parallel)') {
+    /* ================================================= */
+      steps {
         script {
-            sh """
-                set -e
 
-                echo "Cloning repo..."
-                git clone ${GIT_REPO_URL}
+          def branches = [:]
 
-                cd bu-dgt-paymentor-core-aws-app
-                git checkout client/${CUSTOMER}/${ENVIRONMENT}
+          executionList.each { t ->
 
-                echo "========================================"
-                echo "Workspace inside repo after checkout:"
-                echo "========================================"
-                ls -l
+            def CUSTOMER = t.customer
+            def ENV_NAME = t.env
 
-                SRC_DIR="devops_handled_lambdas"
-                DEST_DIR="application/lambdas"
+            branches["Tenant | ${CUSTOMER}"] = {
 
-                echo "========================================"
-                echo "Checking for \$SRC_DIR at repo root..."
-                echo "========================================"
+              def tenantTotal  = 0
+              def tenantReport = ""
 
-                if [ -d "\${SRC_DIR}" ]; then
-        mkdir -p "\${DEST_DIR}"
-        cp -r "\${SRC_DIR}"/. "\${DEST_DIR}"/
-        rm -rf "\${SRC_DIR}"
-    else
-        echo "Folder '\${SRC_DIR}' not found. Skipping."
-    fi
+              try {
+                echo "Processing ${CUSTOMER} - ${ENV_NAME}"
 
-                echo "========================================"
-                echo "Final lambdas directory structure:"
-                echo "========================================"
-                ls -l "\$DEST_DIR" || true
-            """
-        }
-    }
-}
+                /* ---- Mapping ---- */
+                def mapFile = "resources/customer-mapping/${CUSTOMER}.json"
+                if (!fileExists(mapFile)) return
 
+                def mapping = readJSON file: mapFile
+                if (!mapping.containsKey(ENV_NAME)) return
 
-stage('ECS Build & Push') {
-    when {
-        expression { 
-            params.UPLOAD_NEW_IMAGE && 
-            params.CUSTOMER == 'lfs' && 
-            !params.IMAGE_TAG?.trim()
-        }
-    }
-    steps {
-        withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-            script {
-                sh """
+                def TENANT_SHORT = mapping[ENV_NAME].tenant_id
+
+                /* ---- Account selection ---- */
+                def selectedMap =
+                  (CUSTOMER == 'lfs') ? envAccountMapLFS :
+                  (CUSTOMER in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
+                  envAccountMap
+
+                def ACCOUNT_ID = selectedMap[ENV_NAME]
+                def ROLE_ARN  = "arn:aws:iam::${ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
+                def LAMBDA    = "sb-prod3-3878909f-service_limit_lambdas"
+
+                def payload = "payload-${CUSTOMER}.json"
+                def output  = "output-${CUSTOMER}.json"
+                def meta    = "meta-${CUSTOMER}.json"
+                def logs    = "logs-${CUSTOMER}.txt"
+
+                withAWS(role: ROLE_ARN, useNode: true) {
+                  sh """
                     set -e
-                    cd bu-dgt-paymentor-core-aws-app
+                    printf '{"tenant_prefix":"%s"}' "${TENANT_SHORT}" > ${payload}
 
-                    pwd
-                    ls -l application/ecs/
+                    aws lambda invoke \
+                      --function-name ${LAMBDA} \
+                      --region ${AWS_REGION} \
+                      --cli-binary-format raw-in-base64-out \
+                      --payload file://${payload} \
+                      --log-type Tail \
+                      ${output} > ${meta}
 
-                    # Login to ECR once ✅
-                    aws ecr get-login-password --region ${AWS_REGION} | \\
-                    docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-                """
-
-                // Define image name and folder mapping
-                def images = [
-                    [name: 'voice-processor', folder: 'agai_voice_processor'],
-                    [name: 'voice-assistant', folder: 'agai_voice_assistant'],
-                    [name: 'llm-engine', folder: 'agai-llm-engine']
-                ]
-
-                // Sequential execution 👇
-                images.each { img ->
-                    sh """
-                        set -e
-                        cd bu-dgt-paymentor-core-aws-app
-
-                        if [ -d "application/ecs/${img.folder}" ]; then
-                            echo "Building ECS image: ${img.name}"
-
-                            # Build image
-                            docker build -t agai-${img.name}:${BUILD_NUMBER} application/ecs/${img.folder}
-
-                            # Tag image
-                            docker tag agai-${img.name}:${BUILD_NUMBER} \\
-                            ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/sb-${TENANT_ENV}-${TENANT_ID}-agai-${img.name}:${BUILD_NUMBER}
-
-                            # Push image
-                            docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/sb-${TENANT_ENV}-${TENANT_ID}-agai-${img.name}:${BUILD_NUMBER}
-                        else
-                            echo "Folder application/ecs/${img.folder} not found. Skipping ${img.name}."
-                        fi
-                    """
+                    LOG_RESULT=\$(jq -r '.LogResult' ${meta})
+                    [ "\$LOG_RESULT" != "null" ] && echo "\$LOG_RESULT" | base64 --decode > ${logs}
+                  """
                 }
-            }
-        }
-    }
-}
-        stage('Build Java lambda') {
-            when {
-                allOf {
-                    expression { currentBuild.result != 'ABORTED' } // Only run if not aborted
-                    expression { params.BUILD_JAVA_LAMBDA }
-                }
-            }
-            steps {
-                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-                    script {
-                        ansiColor('xterm') {
-                            sh """
-                                chmod +x ./scripts/build-java-lambda.sh && ./scripts/build-java-lambda.sh
-                            """
-                        }
+
+                if (!fileExists(output)) return
+
+                def resp = readJSON file: output
+                def BODY = (resp.body instanceof String) ? readJSON(text: resp.body) : resp.body
+
+                tenantTotal = BODY.total_spend ?: 0
+                def USAGE   = BODY.usage_percent ?: 0
+                def TENANT  = BODY.tenant ?: TENANT_SHORT
+
+                def serviceTable = ""
+
+                if (fileExists(logs)) {
+                  readFile(logs).split('\n').each { l ->
+                    if (l.contains('→ $')) {
+                      def p = l.split('→')
+                      serviceTable += """
+<tr>
+  <td>${p[0].trim()}</td>
+  <td><b>\$${p[1].replace('$','').trim()}</b></td>
+</tr>
+"""
                     }
+                  }
                 }
+
+                tenantReport = """
+<hr/>
+<h3>Tenant: ${TENANT}</h3>
+<p><b>Client:</b> ${CUSTOMER.toUpperCase()}</p>
+<p><b>Environment:</b> ${ENV_NAME.toUpperCase()}</p>
+<p><b>Total Spend:</b> \$${tenantTotal}</p>
+<p><b>Usage:</b> ${USAGE}%</p>
+
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>Service</th><th>Cost</th></tr>
+${serviceTable}
+</table>
+"""
+              }
+              catch (err) {
+                echo "Failed for ${CUSTOMER}: ${err}"
+              }
+
+              tenantResults[CUSTOMER] = [
+                total : tenantTotal,
+                html  : tenantReport
+              ]
             }
+          }
+
+          parallel branches
         }
-
-    
-
-        
-    stage('terraform plan') {
-    steps {
-        withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-            script {
-                ansiColor('xterm') {
-
-                    echo "Using FINAL image tag: ${IMAGE_TAG_FINAL}"
-
-                    sh """
-                        cd bu-dgt-paymentor-core-aws-app/cicd
-                        terraform init -upgrade \
-                          -backend-config="bucket=${AWS_ACCOUNT_ID}-paymentor-tf-state-mgmt" \
-                          -backend-config="key=${TENANT_ENV}/${TENANT_ID}/terraform.tfstate"
-
-                        terraform validate
-
-                        terraform plan -out=tfplan \
-                          -var "customer_id=${TENANT_ID}" \
-                          -var "image_tag=${IMAGE_TAG_FINAL}" \
-                          -var "env_id=${TENANT_ENV}" \
-                          -var "target_env=${ENVIRONMENT}" \
-                          -var-file="tfvars/${ENVIRONMENT}.tfvars"
-                    """
-                }
-            }
-        }
+      }
     }
-}
-        stage('Run terraform Apply?') {
-            input {
-                message 'Continue with deploy?'
-                ok 'Approve'
-                submitter "${env.BUILD_USER_ID}"
-            }
 
-            steps {
-                echo "Deployment approved by ${env.BUILD_USER_ID}."
-            }
-        }
-        // stage('Prod Protection') {
-        //     when {
-        //         expression { params.ENVIRONMENT == "prod" }
-        //     }
-        //     input {
-        //         id 'ProductionApproval'
-        //         message 'WARNING: You are about to deploy to PRODUCTION! This cannot be undone. Do you want to proceed?'
-        //         ok 'Yes, Deploy to Production'
-        //         submitterParameter 'approverId'
-        //         parameters {
-        //             booleanParam(name: 'CONFIRM_DEPLOY', defaultValue: false, description: 'Check this box to confirm deployment to production')
-        //         }
-        //     }
-        //     steps {
-        //         script {
-        //             if (env.CONFIRM_DEPLOY != "true") {
-        //                 error "❌ Deployment aborted: CONFIRM_DEPLOY is not set to 'true'."
-        //             }
-        //         }
-        //     }
-        // }
-      stage('terraform apply') {
-    steps {
-        withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-            script {
-                ansiColor('xterm') {
-
-                    echo "Applying with IMAGE TAG: ${IMAGE_TAG_FINAL}"
-
-                    sh """
-                        cd bu-dgt-paymentor-core-aws-app/cicd
-                        terraform apply -input=false -auto-approve \
-                          -var "customer_id=${TENANT_ID}" \
-                          -var "image_tag=${IMAGE_TAG_FINAL}" \
-                          -var "env_id=${TENANT_ENV}" \
-                          -var "target_env=${ENVIRONMENT}" \
-                          -var-file="tfvars/${ENVIRONMENT}.tfvars"
-                    """
-                }
-            }
-        }
-    }
-}
-
-        stage('Configure Pinpoint Event Destination') {
-  when { expression { params.RUN_CLI_SCRIPT } }
+    /* ================================================= */
+stage('Aggregate & Send Email') {
   steps {
-    withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-      script {
-        def configSetName = "sb-${TENANT_ENV}-${TENANT_ID}-sms-config"
-        def eventDestName = "sb-${TENANT_ENV}-${TENANT_ID}-sms-event-destination"
-        def firehoseName  = "sb-${TENANT_ENV}-${TENANT_ID}-pinpoint-sms-to-s3"
-        def roleArn       = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/sb-${TENANT_ENV}-${TENANT_ID}-pinpoint-event-to-firehose-role"
+    script {
 
-        echo "Fetching Firehose ARN for stream: ${firehoseName}"
-        def firehoseArn = sh(
-          script: "aws firehose describe-delivery-stream --delivery-stream-name ${firehoseName} --query 'DeliveryStreamDescription.DeliveryStreamARN' --output text",
-          returnStdout: true
-        ).trim()
+      /* ============================= */
+      /* 1️⃣ Calculate Grand Total     */
+      /* ============================= */
+      GRAND_TOTAL = 0
+      tenantResults.each { k, v ->
+        if (v != null) {
+          GRAND_TOTAL += (v.total ?: 0)
+        }
+      }
 
-        echo "Using Configuration Set: ${configSetName}"
-        echo "Using Event Destination Name: ${eventDestName}"
-        echo "Using Role ARN: ${roleArn}"
-        echo "Using Firehose ARN: ${firehoseArn}"
+      /* ============================= */
+      /* 2️⃣ Convert Map → List        */
+      /* ============================= */
+      def tenantList = []
 
-        // Ensure the stream is fully ready (optional)
-        sh "sleep 10"
+      tenantResults.each { k, v ->
+        if (v != null) {
+          tenantList.add([
+            customer: k,
+            total   : (v.total ?: 0),
+            html    : v.html ?: ""
+          ])
+        } else {
+          echo "Skipping ${k} — no data"
+        }
+      }
 
-        // Write destination JSON to avoid escape issues
-        writeFile file: 'firehose-dest.json', text: """{
-          "DeliveryStreamArn": "${firehoseArn}",
-          "IamRoleArn": "${roleArn}"
-        }"""
+      /* ============================= */
+      /* 3️⃣ Sort by total DESC        */
+      /* ============================= */
+      tenantList.sort { -it.total }
 
-        // Create (or re-create) the destination
-        sh """
-  set -e
+      /* ============================= */
+      /* 4️⃣ Build Final Report        */
+      /* ============================= */
+      FINAL_REPORT = ""
 
-  echo "Checking if event destination exists..."
-  EXISTS=\$(aws pinpoint-sms-voice-v2 describe-configuration-sets \
-    --configuration-set-names ${configSetName} \
-    --query "length(ConfigurationSets[0].EventDestinations[?EventDestinationName=='${eventDestName}'])" \
-    --output text)
+      tenantList.each { t ->
 
-  if [ "\$EXISTS" = "0" ] || [ "\$EXISTS" = "None" ]; then
-    echo "Event destination not found; creating..."
-    aws pinpoint-sms-voice-v2 create-event-destination \
-      --configuration-set-name ${configSetName} \
-      --event-destination-name ${eventDestName} \
-      --matching-event-types TEXT_ALL \
-      --kinesis-firehose-destination file://firehose-dest.json \
-      --cli-binary-format raw-in-base64-out
-  else
-    echo "Event destination exists; updating..."
-    aws pinpoint-sms-voice-v2 update-event-destination \
-      --configuration-set-name ${configSetName} \
-      --event-destination-name ${eventDestName} \
-      --matching-event-types TEXT_ALL \
-      --kinesis-firehose-destination file://firehose-dest.json \
-      --enabled
-  fi
+        def tenantTotal = t.total
+        def customer    = t.customer
+
+        def usagePercent = 0
+        if (GRAND_TOTAL > 0) {
+          usagePercent = (tenantTotal * 100.0) / GRAND_TOTAL
+          usagePercent = Math.round(usagePercent * 100) / 100
+        }
+
+        def html = t.html
+
+        // Extract service table
+       def serviceTableMatch = (html =~ /(?s)<table.*?<\/table>/)
+def serviceTable = serviceTableMatch ? serviceTableMatch[0] : ""
+
+        // Extract tenant name
+       def tenantMatch = (html =~ /<h3>Tenant: (.*?)<\/h3>/)
+def tenantName = tenantMatch ? tenantMatch[0][1] : "N/A"
+
+        /* ============================= */
+        /* 🎨 Card UI                   */
+        /* ============================= */
+        FINAL_REPORT += """
+<div style="border:1px solid #e0e0e0;border-radius:10px;padding:15px;margin-bottom:20px;background:#fafafa;">
+
+  <h3>🏢 Tenant: ${tenantName}</h3>
+
+  <p><b>Client:</b> ${customer.toUpperCase()}</p>
+  <p><b>Total Spend:</b> <span style="color:#d9534f;font-weight:bold;">\$${tenantTotal}</span></p>
+
+  <!-- Usage Bar -->
+  <div style="background:#e9ecef;border-radius:5px;height:12px;">
+    <div style="width:${usagePercent}%;background:#28a745;height:12px;"></div>
+  </div>
+  <p style="font-size:12px;">Usage: <b>${usagePercent}%</b></p>
+
+  <div style="margin-top:10px;">
+    ${serviceTable}
+  </div>
+
+</div>
 """
       }
+
+      /* ============================= */
+      /* 5️⃣ Send Email                */
+      /* ============================= */
+      emailext(
+        to: EMAIL_RECIPIENTS,
+        subject: "📊 Consolidated Cost Report",
+        mimeType: 'text/html',
+        body: """
+<div style="font-family:Arial;background:#f4f6f8;padding:20px;">
+  <div style="max-width:900px;margin:auto;background:#fff;padding:25px;border-radius:10px;">
+
+    <h2>📊 Multi-Tenant Cost Monitoring</h2>
+
+    <div style="background:#fff3cd;border:1px solid #ffeeba;padding:15px;border-radius:8px;margin:20px 0;">
+      <div>💰 Grand Total Spend</div>
+      <div style="font-size:30px;font-weight:bold;color:#a94442;">
+        \$${GRAND_TOTAL}
+      </div>
+    </div>
+
+    ${FINAL_REPORT}
+
+    <p style="font-size:12px;color:#999;text-align:center;">
+      Generated automatically by Jenkins CI/CD Pipeline
+    </p>
+
+  </div>
+</div>
+"""
+      )
+    }
+  }
+}
+  }
+
+  post {
+    always {
+      deleteDir()
     }
   }
 }
 
 
+I need some help in this, first thing, it should contruct the lambda name based on the environment we are deploying it to.
+
+for eg, sb-prod3-3878909f-service_limit_lambdas this is the lambda name currently, 
+
+I need it to be:  sb-prod3-3878909f-service_limit_lambdas
 
 
-        stage('flyway deployment') {
-            when {
-                allOf {
-                    expression { currentBuild.result != 'ABORTED' } // Only run if not aborted
-                    expression { params.RUN_DB_MIGRATION }
-                }
-            }
-            steps {
-                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-                    script {
-                        sh """
-                        chmod +x ./scripts/flyway.sh && ./scripts/flyway.sh
-                        """
-                    }
-                }
-            }
-        }
-    }
-    post {
-        always {
-            deleteDir()
-        }
-    }
-}
+I needs this prod3 and 3878909f this to be entered dynamically.
+
+or let me tell you..
+
+I guess its better we get rid of this whole selection thing as of now I guess:
+
+ choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','nrgr','lfs','clientdemo']),
+
+
+ because the single lambda is going to work for all of the above tenants as they are all in one single account itself.
+
+for for prod, lambda name is:  sb-prod3-3878909f-service_limit_lambdas
+dev sb-dev14-3878909f-service_limit_lambdas
+uat sb-utp2-3878909f-service_limit_lambdas
+
+ 
