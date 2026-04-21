@@ -1,6 +1,5 @@
 properties([
   parameters([
-    choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','nrgr','lfs','clientdemo']),
     choice(name: 'ENVIRONMENT', choices: ['prod','uat','dev']),
     string(name: 'AWS_REGION', defaultValue: 'us-east-1'),
     booleanParam(name: 'RUN_ALL', defaultValue: true, description: 'Run for all customers (cron mode)')
@@ -47,19 +46,20 @@ pipeline {
             uat  : '793586321398',
             prod : '501957928506'
           ]
+          envCodeMap = [
+            prod: 'prod3',
+            dev : 'dev14',
+            uat : 'utp2'
+          ]
 
           TARGETS = [
             [env:'prod', customer:'tdb'],
             [env:'prod', customer:'lcc'],
-            [env:'prod', customer:'fdr'],
             [env:'prod', customer:'nrg'],
             [env:'prod', customer:'demo'],
-            [env:'prod', customer:'bcs'],
-            [env:'prod', customer:'hsbcinm'],
-            [env:'prod', customer:'hsbcmyh'],
+            [env:'prod', customer:'bcs'],   
             [env:'prod', customer:'sce'],
             [env:'prod', customer:'nrgr'],
-            [env:'prod', customer:'lfs'],
             [env:'prod', customer:'clientdemo']
           ]
 
@@ -108,8 +108,10 @@ pipeline {
 
                 def ACCOUNT_ID = selectedMap[ENV_NAME]
                 def ROLE_ARN  = "arn:aws:iam::${ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
-                def LAMBDA    = "sb-prod3-3878909f-service_limit_lambdas"
+               def ENV_CODE = envCodeMap[ENV_NAME]
+def TENANT_GROUP = "3878909f"
 
+def LAMBDA = "sb-${ENV_CODE}-${TENANT_GROUP}-service_limit_lambdas"
                 def payload = "payload-${CUSTOMER}.json"
                 def output  = "output-${CUSTOMER}.json"
                 def meta    = "meta-${CUSTOMER}.json"
@@ -317,28 +319,3 @@ def tenantName = tenantMatch ? tenantMatch[0][1] : "N/A"
     }
   }
 }
-
-
-I need some help in this, first thing, it should contruct the lambda name based on the environment we are deploying it to.
-
-for eg, sb-prod3-3878909f-service_limit_lambdas this is the lambda name currently, 
-
-I need it to be:  sb-prod3-3878909f-service_limit_lambdas
-
-
-I needs this prod3 and 3878909f this to be entered dynamically.
-
-or let me tell you..
-
-I guess its better we get rid of this whole selection thing as of now I guess:
-
- choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','nrgr','lfs','clientdemo']),
-
-
- because the single lambda is going to work for all of the above tenants as they are all in one single account itself.
-
-for for prod, lambda name is:  sb-prod3-3878909f-service_limit_lambdas
-dev sb-dev14-3878909f-service_limit_lambdas
-uat sb-utp2-3878909f-service_limit_lambdas
-
- 
