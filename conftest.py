@@ -1,3 +1,49 @@
+there is only 1 issue now, 
+
+💰 Grand Total Spend
+$1264.37
+🏢 Tenant: 69fc3147
+
+Client: CLIENTDEMO
+
+Total Spend: $371.7
+
+Usage: 37.17%
+
+Service	Cost
+AWS End User Messaging	$44.19
+AWS Key Management Service	$1.46
+AWS Lambda	$0.04
+AWS Secrets Manager	$1.15
+Amazon API Gateway	$0.0
+Amazon CloudFront	$0.96
+Amazon DynamoDB	$0.0
+Amazon Elastic Container Service	$12.52
+Amazon Elastic Load Balancing	$37.33
+Amazon Kinesis Firehose	$0.0
+Amazon Lex	$0.37
+Amazon Relational Database Service	$243.38
+Amazon Route 53	$4.02
+Amazon SageMaker	$23.88
+Amazon Simple Email Service	$0.04
+Amazon Simple Notification Service	$0.01
+Amazon Simple Queue Service	$2.11
+Amazon Simple Storage Service	$0.1
+AmazonCloudWatch	$0.15
+
+
+if you see the percentage, 
+
+Usage: 37.17%
+
+
+its just assuming the account limit to be 1000 dollars and based on that, its finding out the usage percentage.
+
+but what we need is, it should be calculated this way:   37.17/1264.17*100
+
+
+here's the current jenkins file, please rewrite it with the fix:
+
 properties([
   parameters([
     choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','nrgr','lfs','clientdemo']),
@@ -12,13 +58,13 @@ pipeline {
   agent { label 'cicd' }
 
   triggers {
-    cron('H H * * 1')
+    cron('30 15 * * *')
   }
 
-  environment {
-    OIDC_ROLE_NAME   = "paymentor-oidc-role"
-    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com"
-  }
+environment {
+  OIDC_ROLE_NAME   = "paymentor-oidc-role"
+  EMAIL_RECIPIENTS = "amit.singh8@exlservice.com,Suman.Porel@exlservice.com,Prashant.Varma@exlservice.com"
+}
 
   stages {
 
@@ -244,7 +290,7 @@ pipeline {
     <div style="background:#fff3cd;border:1px solid #ffeeba;padding:15px;border-radius:8px;margin:20px 0;">
       <div>💰 Grand Total Spend</div>
       <div style="font-size:30px;font-weight:bold;color:#a94442;">
-        \$${GRAND_TOTAL}
+        \$${String.format('%.2f', GRAND_TOTAL)}
       </div>
     </div>
 
