@@ -1,3 +1,7 @@
+This below jenkins file is working perfectly as of now,
+I need some more help with enhancement, I need that for each tenant, it highlight the service costing the highest with maybe red colour and the the second highest cost service in yellow colour. please rewrite the whole jenkins file with this change.
+
+
 properties([
   parameters([
     choice(name: 'CUSTOMER', choices: ['tdb','lcc','nrg','demo','bcs','sce','nrgr','clientdemo']),
