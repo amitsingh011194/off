@@ -1,6 +1,14 @@
-This below jenkins file is working perfectly as of now,
-I need some more help with enhancement, I need that for each tenant, it highlight the service costing the highest with maybe red colour and the the second highest cost service in yellow colour. please rewrite the whole jenkins file with this change.
+✅ Recommended Plan (What to implement NOW)
+Start with these 3:
+✔ Subject rename
+✔ Remove tenant ID
+✔ Add total row
+These will take <15 mins total and visibly improve output.
 
+Lets get done with these three, could you rewrite the whole jenkins file with these implemented.
+
+
+here's the current working Jenkins file:
 
 properties([
   parameters([
@@ -21,7 +29,7 @@ pipeline {
 
   environment {
     OIDC_ROLE_NAME   = "paymentor-oidc-role"
-    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com,Suman.Porel@exlservice.com,Prashant.Varma@exlservice.com"
+    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com"
   }
 
   stages {
@@ -30,14 +38,10 @@ pipeline {
       steps {
         script {
 
-          // ✅ Safe formatter
-          fmt = { val ->
-            return String.format('%.2f', ((val ?: 0) as Double))
-          }
+          fmt = { val -> String.format('%.2f', ((val ?: 0) as Double)) }
 
           tenantResults = [:]
 
-          // ✅ Single account map only (simplified)
           envAccountMap = [
             dev  : '607436280417',
             uat  : '658960620175',
@@ -51,22 +55,24 @@ pipeline {
           ]
 
           ENV_LIST = ['prod','uat','dev']
-
-          // ✅ Cleaned customer list
           ALL_CUSTOMERS = ['tdb','lcc','nrg','demo','bcs','sce','nrgr','clientdemo']
 
           executionList = []
 
           if (params.CRON_MODE) {
-            ENV_LIST.each { e ->
-              ALL_CUSTOMERS.each { c ->
+            for (e in ENV_LIST) {
+              for (c in ALL_CUSTOMERS) {
                 executionList.add([env: e, customer: c])
               }
             }
           } else {
-            executionList = params.RUN_ALL ?
-              ALL_CUSTOMERS.collect { c -> [env: params.ENVIRONMENT, customer: c] } :
-              [[env: params.ENVIRONMENT, customer: params.CUSTOMER]]
+            if (params.RUN_ALL) {
+              for (c in ALL_CUSTOMERS) {
+                executionList.add([env: params.ENVIRONMENT, customer: c])
+              }
+            } else {
+              executionList = [[env: params.ENVIRONMENT, customer: params.CUSTOMER]]
+            }
           }
         }
       }
@@ -78,7 +84,7 @@ pipeline {
 
           def branches = [:]
 
-          executionList.each { t ->
+          for (t in executionList) {
 
             def CUSTOMER = t.customer
             def ENV_NAME = t.env
@@ -86,11 +92,11 @@ pipeline {
             branches["${ENV_NAME}-${CUSTOMER}"] = {
 
               def result = [
-                env         : ENV_NAME,
-                total       : 0,
-                tenant      : "",
-                customer    : CUSTOMER,
-                serviceTable: ""
+                env      : ENV_NAME,
+                total    : 0,
+                tenant   : "",
+                customer : CUSTOMER,
+                services : []
               ]
 
               try {
@@ -109,7 +115,6 @@ pipeline {
 
                 def TENANT_SHORT = mapping[ENV_NAME].tenant_id
 
-                // ✅ Only one account logic now
                 def ACCOUNT_ID = envAccountMap[ENV_NAME]
                 def ROLE_ARN   = "arn:aws:iam::${ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
 
@@ -146,28 +151,20 @@ pipeline {
                 def resp = readJSON file: output
                 def BODY = (resp.body instanceof String) ? readJSON(text: resp.body) : resp.body
 
-                def tenantTotal = BODY.total_spend ?: 0
-                def TENANT      = BODY.tenant ?: TENANT_SHORT
-
-                def serviceTable = ""
+                result['total']  = BODY.total_spend ?: 0
+                result['tenant'] = BODY.tenant ?: TENANT_SHORT
 
                 if (fileExists(logs)) {
-                  readFile(logs).split('\\n').each { l ->
+                  def lines = readFile(logs).split('\\n')
+                  for (l in lines) {
                     if (l.contains('→ $')) {
                       def p = l.split('→')
-                      serviceTable += """
-<tr>
-  <td>${p[0].trim()}</td>
-  <td><b>\$${p[1].replace('$','').trim()}</b></td>
-</tr>
-"""
+                      def svc = p[0].trim()
+                      def val = (p[1].replace('$','').trim()) as Double
+                      result['services'].add([name: svc, cost: val])
                     }
                   }
                 }
-
-                result.total = tenantTotal
-                result.tenant = TENANT
-                result.serviceTable = serviceTable
 
               } catch (err) {
                 echo "Error ${CUSTOMER}-${ENV_NAME}: ${err}"
@@ -181,75 +178,119 @@ pipeline {
         }
       }
     }
+stage('Send Emails Per Environment') {
+  steps {
+    script {
 
-    stage('Send Emails Per Environment') {
-      steps {
-        script {
+      for (envName in ['prod','uat','dev']) {
 
-          ['prod','uat','dev'].each { envName ->
+        def envData = []
 
-            def envData = []
+        for (entry in tenantResults) {
+          def v = entry.value
+          if (v['env'] == envName) {
+            envData.add(v)
+          }
+        }
 
-            tenantResults.each { k, v ->
-              if (v.env == envName) {
-                envData.add(v)
-              }
+        if (envData.size() == 0) continue
+
+        // ✅ SAFE SORT (no CPS issues)
+        for (int i = 0; i < envData.size(); i++) {
+          for (int j = i + 1; j < envData.size(); j++) {
+            if ((envData[j]['total'] ?: 0) > (envData[i]['total'] ?: 0)) {
+              def temp = envData[i]
+              envData[i] = envData[j]
+              envData[j] = temp
+            }
+          }
+        }
+
+        def GRAND_TOTAL = 0
+        for (d in envData) {
+          GRAND_TOTAL += (d['total'] ?: 0)
+        }
+
+        def FINAL_REPORT = ""
+
+        for (d in envData) {
+
+          def usagePercent = 0
+          if (GRAND_TOTAL > 0) {
+            usagePercent = (d['total'] * 100.0) / GRAND_TOTAL
+          }
+
+          // ✅ FIND TOP 2 SERVICES (NO SORT)
+          def max1 = -1
+          def max2 = -1
+
+          for (s in d['services']) {
+            def cost = s['cost'] ?: 0
+
+            if (cost > max1) {
+              max2 = max1
+              max1 = cost
+            } else if (cost > max2) {
+              max2 = cost
+            }
+          }
+
+          def serviceTable = ""
+
+          for (s in d['services']) {
+
+            def cost = s['cost'] ?: 0
+            def color = ""
+
+            if (cost == max1) {
+              color = "#f8d7da"   // 🔴 highest
+            } else if (cost == max2) {
+              color = "#fff3cd"   // 🟡 second highest
             }
 
-            if (envData.size() == 0) return
+            serviceTable += """
+<tr style="background:${color};">
+  <td>${s['name']}</td>
+  <td><b>\$${fmt(cost)}</b></td>
+</tr>
+"""
+          }
 
-            envData.sort { -it.total }
-
-            def GRAND_TOTAL = 0
-            envData.each { d -> GRAND_TOTAL += d.total }
-
-            def FINAL_REPORT = ""
-
-            envData.each { d ->
-
-              def usagePercent = 0
-              if (GRAND_TOTAL > 0) {
-                usagePercent = (d.total * 100.0) / GRAND_TOTAL
-                usagePercent = Math.round(usagePercent * 100) / 100
-              }
-
-              FINAL_REPORT += """
+          FINAL_REPORT += """
 <div style="border:1px solid #e0e0e0;border-radius:10px;padding:15px;margin-bottom:15px;background:#fafafa;">
 
-  <h3>🏢 Tenant: ${d.tenant}</h3>
-  <p><b>Client:</b> ${d.customer.toUpperCase()}</p>
+  <h3>🏢 Tenant: ${d['tenant']}</h3>
+  <p><b>Client:</b> ${d['customer'].toUpperCase()}</p>
 
   <p><b>Total Spend:</b>
     <span style="color:#d9534f;font-weight:bold;">
-      \$${fmt(d.total)}
+      \$${fmt(d['total'])}
     </span>
   </p>
 
   <div style="background:#e9ecef;border-radius:5px;height:12px;">
-    <div style="width:${usagePercent}%;background:#28a745;height:12px;"></div>
+    <div style="width:${fmt(usagePercent)}%;background:#28a745;height:12px;"></div>
   </div>
 
   <p style="font-size:12px;">Usage: <b>${fmt(usagePercent)}%</b></p>
 
-  <div style="margin-top:10px;">
-    <table border="1" cellpadding="6" cellspacing="0" style="width:100%;border-collapse:collapse;">
-      <tr style="background:#f1f1f1;">
-        <th>Service</th>
-        <th>Cost</th>
-      </tr>
-      ${d.serviceTable}
-    </table>
-  </div>
+  <table border="1" cellpadding="6" cellspacing="0" style="width:100%;border-collapse:collapse;">
+    <tr style="background:#f1f1f1;">
+      <th>Service</th>
+      <th>Cost</th>
+    </tr>
+    ${serviceTable}
+  </table>
 
 </div>
 """
-            }
+        }
 
-            emailext(
-              to: EMAIL_RECIPIENTS,
-              subject: "📊 PCAAS Account Cost Report - ${envAccountMap[envName]} - ${envName.toUpperCase()}",
-              mimeType: 'text/html',
-              body: """
+        emailext(
+          to: EMAIL_RECIPIENTS,
+          subject: "📊 PCAAS Account Cost Report - ${envAccountMap[envName]} - ${envName.toUpperCase()}",
+          mimeType: 'text/html',
+          body: """
 <div style="font-family:Arial;background:#f4f6f8;padding:20px;">
   <div style="max-width:900px;margin:auto;background:#fff;padding:25px;border-radius:10px;">
 
@@ -267,11 +308,11 @@ pipeline {
   </div>
 </div>
 """
-            )
-          }
-        }
+        )
       }
     }
+  }
+}
   }
 
   post {
