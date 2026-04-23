@@ -1,14 +1,6 @@
-I need some more help, please remove these tenants from the email:
-
-
-hsbcinm, hsbcmyh, lfs, fdr
-
-I need these tenants to be gone completely from this whole pipeline:
-
-
 properties([
   parameters([
-    choice(name: 'CUSTOMER', choices: ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','nrgr','lfs','clientdemo']),
+    choice(name: 'CUSTOMER', choices: ['tdb','lcc','nrg','demo','bcs','sce','nrgr','clientdemo']),
     choice(name: 'ENVIRONMENT', choices: ['prod','uat','dev']),
     string(name: 'AWS_REGION', defaultValue: 'us-east-1'),
     booleanParam(name: 'RUN_ALL', defaultValue: true),
@@ -25,7 +17,7 @@ pipeline {
 
   environment {
     OIDC_ROLE_NAME   = "paymentor-oidc-role"
-    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com"
+    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com,Suman.Porel@exlservice.com,Prashant.Varma@exlservice.com"
   }
 
   stages {
@@ -34,29 +26,18 @@ pipeline {
       steps {
         script {
 
-          // ✅ Safe formatter (fixes your issue permanently)
+          // ✅ Safe formatter
           fmt = { val ->
             return String.format('%.2f', ((val ?: 0) as Double))
           }
 
           tenantResults = [:]
 
+          // ✅ Single account map only (simplified)
           envAccountMap = [
             dev  : '607436280417',
             uat  : '658960620175',
             prod : '016795361898'
-          ]
-
-          envAccountMapLFS = [
-            dev  : '116981803571',
-            uat  : '216989139664',
-            prod : '767828744639'
-          ]
-
-          envAccountMapHSBC = [
-            dev  : '088082905288',
-            uat  : '793586321398',
-            prod : '501957928506'
           ]
 
           envCodeMap = [
@@ -66,7 +47,9 @@ pipeline {
           ]
 
           ENV_LIST = ['prod','uat','dev']
-          ALL_CUSTOMERS = ['tdb','lcc','fdr','nrg','demo','bcs','hsbcinm','hsbcmyh','sce','nrgr','lfs','clientdemo']
+
+          // ✅ Cleaned customer list
+          ALL_CUSTOMERS = ['tdb','lcc','nrg','demo','bcs','sce','nrgr','clientdemo']
 
           executionList = []
 
@@ -122,12 +105,8 @@ pipeline {
 
                 def TENANT_SHORT = mapping[ENV_NAME].tenant_id
 
-                def selectedMap =
-                  (CUSTOMER == 'lfs') ? envAccountMapLFS :
-                  (CUSTOMER in ['hsbcinm','hsbcmyh']) ? envAccountMapHSBC :
-                  envAccountMap
-
-                def ACCOUNT_ID = selectedMap[ENV_NAME]
+                // ✅ Only one account logic now
+                def ACCOUNT_ID = envAccountMap[ENV_NAME]
                 def ROLE_ARN   = "arn:aws:iam::${ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
 
                 def ENV_CODE = envCodeMap[ENV_NAME]
@@ -263,10 +242,10 @@ pipeline {
             }
 
             emailext(
-  to: EMAIL_RECIPIENTS,
-  subject: "📊 PCAAS Account Cost Report - ${envAccountMap[envName]} - ${envName.toUpperCase()}",
-  mimeType: 'text/html',
-  body: """
+              to: EMAIL_RECIPIENTS,
+              subject: "📊 PCAAS Account Cost Report - ${envAccountMap[envName]} - ${envName.toUpperCase()}",
+              mimeType: 'text/html',
+              body: """
 <div style="font-family:Arial;background:#f4f6f8;padding:20px;">
   <div style="max-width:900px;margin:auto;background:#fff;padding:25px;border-radius:10px;">
 
@@ -284,7 +263,7 @@ pipeline {
   </div>
 </div>
 """
-)
+            )
           }
         }
       }
