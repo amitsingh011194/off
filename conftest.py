@@ -1,48 +1,10 @@
-there is only 1 issue now, 
-
-💰 Grand Total Spend
-$1264.37
-🏢 Tenant: 69fc3147
-
-Client: CLIENTDEMO
-
-Total Spend: $371.7
-
-Usage: 37.17%
-
-Service	Cost
-AWS End User Messaging	$44.19
-AWS Key Management Service	$1.46
-AWS Lambda	$0.04
-AWS Secrets Manager	$1.15
-Amazon API Gateway	$0.0
-Amazon CloudFront	$0.96
-Amazon DynamoDB	$0.0
-Amazon Elastic Container Service	$12.52
-Amazon Elastic Load Balancing	$37.33
-Amazon Kinesis Firehose	$0.0
-Amazon Lex	$0.37
-Amazon Relational Database Service	$243.38
-Amazon Route 53	$4.02
-Amazon SageMaker	$23.88
-Amazon Simple Email Service	$0.04
-Amazon Simple Notification Service	$0.01
-Amazon Simple Queue Service	$2.11
-Amazon Simple Storage Service	$0.1
-AmazonCloudWatch	$0.15
+I need some more help, please remove these tenants from the email:
 
 
-if you see the percentage, 
+hsbcinm, hsbcmyh, lfs, fdr
 
-Usage: 37.17%
+I need these tenants to be gone completely from this whole pipeline:
 
-
-its just assuming the account limit to be 1000 dollars and based on that, its finding out the usage percentage.
-
-but what we need is, it should be calculated this way:   37.17/1264.17*100
-
-
-here's the current jenkins file, please rewrite it with the fix:
 
 properties([
   parameters([
@@ -61,16 +23,21 @@ pipeline {
     cron('30 15 * * *')
   }
 
-environment {
-  OIDC_ROLE_NAME   = "paymentor-oidc-role"
-  EMAIL_RECIPIENTS = "amit.singh8@exlservice.com,Suman.Porel@exlservice.com,Prashant.Varma@exlservice.com"
-}
+  environment {
+    OIDC_ROLE_NAME   = "paymentor-oidc-role"
+    EMAIL_RECIPIENTS = "amit.singh8@exlservice.com"
+  }
 
   stages {
 
     stage('Initialize Context') {
       steps {
         script {
+
+          // ✅ Safe formatter (fixes your issue permanently)
+          fmt = { val ->
+            return String.format('%.2f', ((val ?: 0) as Double))
+          }
 
           tenantResults = [:]
 
@@ -131,7 +98,13 @@ environment {
 
             branches["${ENV_NAME}-${CUSTOMER}"] = {
 
-              def result = [env: ENV_NAME, total: 0, html: ""]
+              def result = [
+                env         : ENV_NAME,
+                total       : 0,
+                tenant      : "",
+                customer    : CUSTOMER,
+                serviceTable: ""
+              ]
 
               try {
 
@@ -191,10 +164,8 @@ environment {
                 def BODY = (resp.body instanceof String) ? readJSON(text: resp.body) : resp.body
 
                 def tenantTotal = BODY.total_spend ?: 0
-                def USAGE       = BODY.usage_percent ?: 0
                 def TENANT      = BODY.tenant ?: TENANT_SHORT
 
-                /* -------- SERVICE TABLE -------- */
                 def serviceTable = ""
 
                 if (fileExists(logs)) {
@@ -212,34 +183,9 @@ environment {
                 }
 
                 result.total = tenantTotal
+                result.tenant = TENANT
+                result.serviceTable = serviceTable
 
-                result.html = """
-<div style="border:1px solid #e0e0e0;border-radius:10px;padding:15px;margin-bottom:15px;background:#fafafa;">
-
-  <h3>🏢 Tenant: ${TENANT}</h3>
-  <p><b>Client:</b> ${CUSTOMER.toUpperCase()}</p>
-
-  <p><b>Total Spend:</b>
-    <span style="color:#d9534f;font-weight:bold;">\$${tenantTotal}</span>
-  </p>
-
-  <div style="background:#e9ecef;border-radius:5px;height:12px;">
-    <div style="width:${USAGE}%;background:#28a745;height:12px;"></div>
-  </div>
-  <p style="font-size:12px;">Usage: <b>${USAGE}%</b></p>
-
-  <div style="margin-top:10px;">
-    <table border="1" cellpadding="6" cellspacing="0" style="width:100%;border-collapse:collapse;">
-      <tr style="background:#f1f1f1;">
-        <th>Service</th>
-        <th>Cost</th>
-      </tr>
-      ${serviceTable}
-    </table>
-  </div>
-
-</div>
-"""
               } catch (err) {
                 echo "Error ${CUSTOMER}-${ENV_NAME}: ${err}"
               }
@@ -275,22 +221,61 @@ environment {
             envData.each { d -> GRAND_TOTAL += d.total }
 
             def FINAL_REPORT = ""
-            envData.each { d -> FINAL_REPORT += d.html }
+
+            envData.each { d ->
+
+              def usagePercent = 0
+              if (GRAND_TOTAL > 0) {
+                usagePercent = (d.total * 100.0) / GRAND_TOTAL
+                usagePercent = Math.round(usagePercent * 100) / 100
+              }
+
+              FINAL_REPORT += """
+<div style="border:1px solid #e0e0e0;border-radius:10px;padding:15px;margin-bottom:15px;background:#fafafa;">
+
+  <h3>🏢 Tenant: ${d.tenant}</h3>
+  <p><b>Client:</b> ${d.customer.toUpperCase()}</p>
+
+  <p><b>Total Spend:</b>
+    <span style="color:#d9534f;font-weight:bold;">
+      \$${fmt(d.total)}
+    </span>
+  </p>
+
+  <div style="background:#e9ecef;border-radius:5px;height:12px;">
+    <div style="width:${usagePercent}%;background:#28a745;height:12px;"></div>
+  </div>
+
+  <p style="font-size:12px;">Usage: <b>${fmt(usagePercent)}%</b></p>
+
+  <div style="margin-top:10px;">
+    <table border="1" cellpadding="6" cellspacing="0" style="width:100%;border-collapse:collapse;">
+      <tr style="background:#f1f1f1;">
+        <th>Service</th>
+        <th>Cost</th>
+      </tr>
+      ${d.serviceTable}
+    </table>
+  </div>
+
+</div>
+"""
+            }
 
             emailext(
-              to: EMAIL_RECIPIENTS,
-              subject: "📊 Cost Report - ${envName.toUpperCase()}",
-              mimeType: 'text/html',
-              body: """
+  to: EMAIL_RECIPIENTS,
+  subject: "📊 PCAAS Account Cost Report - ${envAccountMap[envName]} - ${envName.toUpperCase()}",
+  mimeType: 'text/html',
+  body: """
 <div style="font-family:Arial;background:#f4f6f8;padding:20px;">
   <div style="max-width:900px;margin:auto;background:#fff;padding:25px;border-radius:10px;">
 
-    <h2>📊 Cost Report - ${envName.toUpperCase()}</h2>
+    <h2>📊 PCAAS Account Cost Report - ${envAccountMap[envName]} - ${envName.toUpperCase()}</h2>
 
     <div style="background:#fff3cd;border:1px solid #ffeeba;padding:15px;border-radius:8px;margin:20px 0;">
       <div>💰 Grand Total Spend</div>
       <div style="font-size:30px;font-weight:bold;color:#a94442;">
-        \$${String.format('%.2f', GRAND_TOTAL)}
+        \$${fmt(GRAND_TOTAL)}
       </div>
     </div>
 
@@ -299,7 +284,7 @@ environment {
   </div>
 </div>
 """
-            )
+)
           }
         }
       }
