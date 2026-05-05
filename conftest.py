@@ -317,7 +317,3 @@ pipeline {
     }
   }
 }
-
-
-
-This is the current working pipeline. I need to do some changes now, they will be more like a changes to the lambda that we are triggering I guess but just know that this is the current final working pipeline.
