@@ -1,3 +1,12 @@
+
+
+
+okay lets get started. first do we need to update the lambda right?
+Could you share the updated lambda to me now with all the addition.
+This is the current lambda:
+
+
+
 import boto3
 import os
 from datetime import date
