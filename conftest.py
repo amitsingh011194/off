@@ -1,12 +1,3 @@
-
-
-
-okay lets get started. first do we need to update the lambda right?
-Could you share the updated lambda to me now with all the addition.
-This is the current lambda:
-
-
-
 import boto3
 import os
 from datetime import date
@@ -53,13 +44,75 @@ def get_matching_tenants(prefix, start, end):
 
 def lambda_handler(event, context):
     try:
+        mode = event.get("mode", "tenant")
+
+        start = date.today().replace(day=1).strftime('%Y-%m-%d')
+        end = date.today().strftime('%Y-%m-%d')
+
+        print(f"Using TAG_KEY: {TAG_KEY}")
+        print(f"Execution mode: {mode}")
+
+        # =========================================================
+        # 🚫 UNALLOCATED MODE (NEW)
+        # =========================================================
+        if mode == "unallocated":
+            print("Fetching UNALLOCATED (no tag key) cost")
+
+            response = ce.get_cost_and_usage(
+                TimePeriod={'Start': start, 'End': end},
+                Granularity='MONTHLY',
+                Metrics=['UnblendedCost'],
+                GroupBy=[
+                    {"Type": "DIMENSION", "Key": "SERVICE"}
+                ],
+                Filter={
+                    "Not": {
+                        "Tags": {
+                            "Key": TAG_KEY,
+                            "MatchOptions": ["EXISTS"]
+                        }
+                    }
+                }
+            )
+
+            total_unallocated = 0
+            service_costs = {}
+
+            results = response.get('ResultsByTime', [])
+
+            if results:
+                for group in results[0].get('Groups', []):
+                    service_name = group['Keys'][0]
+                    cost = float(group['Metrics']['UnblendedCost']['Amount'])
+
+                    if cost > 0:
+                        rounded_cost = round(cost, 2)
+                        service_costs[service_name] = rounded_cost
+                        total_unallocated += cost
+
+            total_unallocated = round(total_unallocated, 2)
+
+            print("\n=== UNALLOCATED SUMMARY ===")
+            print(f"Total Unallocated Cost: ${total_unallocated}")
+
+            for svc, cost in service_costs.items():
+                print(f"{svc} → ${cost}")
+
+            return {
+                "statusCode": 200,
+                "body": {
+                    "unallocated_cost": total_unallocated,
+                    "service_breakdown": service_costs
+                }
+            }
+
+        # =========================================================
+        # 🏢 TENANT MODE (EXISTING - UNCHANGED)
+        # =========================================================
         tenant_prefix = event.get("tenant_prefix")
 
         if not tenant_prefix:
             raise ValueError("tenant_prefix is required")
-
-        start = date.today().replace(day=1).strftime('%Y-%m-%d')
-        end = date.today().strftime('%Y-%m-%d')
 
         print(f"Fetching cost for tenant prefix: {tenant_prefix}")
 
@@ -80,7 +133,7 @@ def lambda_handler(event, context):
             }
 
         # -----------------------------
-        # 2️⃣ SERVICE BREAKDOWN + TOTAL (single API call)
+        # 2️⃣ SERVICE BREAKDOWN + TOTAL
         # -----------------------------
         service_response = ce.get_cost_and_usage(
             TimePeriod={'Start': start, 'End': end},
@@ -118,7 +171,7 @@ def lambda_handler(event, context):
         percent = round(percent, 2)
 
         # -----------------------------
-        # 📊 Logs (for debugging only)
+        # 📊 Logs
         # -----------------------------
         print("\n=== TENANT SUMMARY ===")
         print(f"Prefix: {tenant_prefix}")
@@ -147,3 +200,6 @@ def lambda_handler(event, context):
     except Exception as e:
         print(f"Error: {str(e)}")
         raise
+
+
+where is the tenanrt prefix coming from or is being passed?
