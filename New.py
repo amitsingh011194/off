@@ -1,20 +1,20 @@
 import boto3
 import os
 from datetime import date
- 
+
 ce = boto3.client('ce')
- 
+
 LIMIT = float(os.environ.get("LIMIT", 1000))
+THRESHOLD = float(os.environ.get("THRESHOLD", 70))
+
 TAG_KEY = "sb:cost:tenant"
- 
- 
-# ---------------------------------------------------
-# GET ALL TAGS
-# ---------------------------------------------------
-def get_all_tenant_tags(start, end):
+
+
+def get_matching_tenants(prefix, start, end):
+    """Fetch all tenant tag values and filter by prefix (with pagination)"""
     all_tags = []
     next_token = None
- 
+
     while True:
         if next_token:
             response = ce.get_tags(
@@ -27,134 +27,164 @@ def get_all_tenant_tags(start, end):
                 TimePeriod={'Start': start, 'End': end},
                 TagKey=TAG_KEY
             )
- 
+
         all_tags.extend(response.get('Tags', []))
         next_token = response.get('NextPageToken')
- 
+
         if not next_token:
             break
- 
-    return sorted(set(all_tags))
- 
- 
-# ---------------------------------------------------
-# GET COST GROUPED BY SERVICE + TAG
-# ---------------------------------------------------
-def get_cost_grouped(start, end):
-    return ce.get_cost_and_usage(
-        TimePeriod={'Start': start, 'End': end},
-        Granularity='MONTHLY',
-        Metrics=['UnblendedCost'],
-        GroupBy=[
-            {"Type": "DIMENSION", "Key": "SERVICE"},
-            {"Type": "TAG", "Key": TAG_KEY}
-        ]
-    )
- 
- 
-# ---------------------------------------------------
-# LAMBDA HANDLER
-# ---------------------------------------------------
+
+    print(f"All tenant tags count: {len(all_tags)}")
+
+    matched = [t for t in all_tags if t.startswith(prefix)]
+    print(f"Matched tenants for prefix '{prefix}': {matched}")
+
+    return matched
+
+
 def lambda_handler(event, context):
     try:
         tenant_prefix = event.get("tenant_prefix")
- 
+
         if not tenant_prefix:
             raise ValueError("tenant_prefix is required")
- 
+
         start = date.today().replace(day=1).strftime('%Y-%m-%d')
         end = date.today().strftime('%Y-%m-%d')
- 
-        print(f"Execution for prefix: {tenant_prefix}")
- 
-        # =====================================================
-        # STEP 1: ALL TAG VALUES
-        # =====================================================
-        all_tags = get_all_tenant_tags(start, end)
- 
-        matched_tenants = [
-            t for t in all_tags
-            if t.startswith(tenant_prefix)
-        ]
- 
-        # =====================================================
-        # STEP 2: COST DATA (TAG + SERVICE)
-        # =====================================================
-        response = get_cost_grouped(start, end)
- 
-        tenant_breakdown = {}
-        total_tagged_cost = 0
- 
-        unallocated_breakdown = {}
-        total_unallocated_cost = 0
- 
-        results = response.get('ResultsByTime', [])
- 
+
+        print(f"Fetching cost for tenant prefix: {tenant_prefix}")
+
+        # 🔍 Step 1: Get matching tenants
+        tenant_values = get_matching_tenants(tenant_prefix, start, end)
+
+        if not tenant_values:
+            print("No matching tenants found")
+            return {
+                "statusCode": 200,
+                "body": {
+                    "tenant_prefix": tenant_prefix,
+                    "matched_tenants": [],
+                    "total_spend": 0,
+                    "usage_percent": 0,
+                    "service_breakdown": {}
+                }
+            }
+
+        # -----------------------------
+        # 2️⃣ SERVICE BREAKDOWN + TOTAL (single API call)
+        # -----------------------------
+        service_response = ce.get_cost_and_usage(
+            TimePeriod={'Start': start, 'End': end},
+            Granularity='MONTHLY',
+            Metrics=['UnblendedCost'],
+            GroupBy=[
+                {"Type": "DIMENSION", "Key": "SERVICE"}
+            ],
+            Filter={
+                "Tags": {
+                    "Key": TAG_KEY,
+                    "Values": tenant_values
+                }
+            }
+        )
+
+        service_costs = {}
+        total_amount = 0
+
+        results = service_response.get('ResultsByTime', [])
+
         if results:
             for group in results[0].get('Groups', []):
- 
-                service = group['Keys'][0]
-                tag_value = group['Keys'][1] if len(group['Keys']) > 1 else None
- 
+                service_name = group['Keys'][0]
                 cost = float(group['Metrics']['UnblendedCost']['Amount'])
- 
-                # =====================================================
-                # UNALLOCATED = NO TAG VALUE (THIS IS THE KEY FIX)
-                # =====================================================
-                if tag_value is None or tag_value == "":
-                    unallocated_breakdown[service] = round(
-                        unallocated_breakdown.get(service, 0) + cost, 2
-                    )
-                    total_unallocated_cost += cost
- 
-                else:
-                    tenant_breakdown[service] = round(
-                        tenant_breakdown.get(service, 0) + cost, 2
-                    )
-                    total_tagged_cost += cost
- 
-        # =====================================================
-        # FINAL TOTAL
-        # =====================================================
-        total_spend = round(total_tagged_cost + total_unallocated_cost, 2)
-        usage_percent = round((total_spend / LIMIT) * 100, 2) if LIMIT else 0
- 
-        # =====================================================
-        # RESPONSE
-        # =====================================================
+
+                if cost > 0:
+                    rounded_cost = round(cost, 2)
+                    service_costs[service_name] = rounded_cost
+                    total_amount += cost
+
+        total_amount = round(total_amount, 2)
+
+        percent = (total_amount / LIMIT) * 100 if LIMIT > 0 else 0
+        percent = round(percent, 2)
+
+        # -----------------------------
+        # 📊 Logs (for debugging only)
+        # -----------------------------
+        print("\n=== TENANT SUMMARY ===")
+        print(f"Prefix: {tenant_prefix}")
+        print(f"Matched Tenants: {tenant_values}")
+        print(f"Total Spend: ${total_amount}")
+        print(f"Usage: {percent}% of ${LIMIT}")
+
+        print("\n=== SERVICE BREAKDOWN ===")
+        for svc, cost in service_costs.items():
+            print(f"{svc} → ${cost}")
+
+        # -----------------------------
+        # ✅ Final Response
+        # -----------------------------
         return {
             "statusCode": 200,
             "body": {
                 "tenant_prefix": tenant_prefix,
-                "all_tag_values": all_tags,
-                "matched_tenants": matched_tenants,
- 
-                "total_spend": total_spend,
-                "usage_percent": usage_percent,
- 
-                "tenant_service_breakdown": tenant_breakdown,
-                "unallocated_service_breakdown": unallocated_breakdown,
- 
-                "unallocated_cost": round(total_unallocated_cost, 2)
+                "matched_tenants": tenant_values,
+                "total_spend": total_amount,
+                "usage_percent": percent,
+                "service_breakdown": service_costs
             }
         }
- 
+
     except Exception as e:
         print(f"Error: {str(e)}")
         raise
 
 
-my idea is that, lets seperate both and create two lambdas., one should handle the tagged resources and the other should handle the untagged resources.
 
-I have already create two lambdas. the one I am sharing is supposed to handle only  the untagged resources.
+sample payload:
 
-I have already tested it out and its pretty much working as expected. 
-
-here's the payload I used:
 {
-  "tenant_prefix": " "
+  "tenant_prefix": "69fc3147"
 }
 
 
-and I got my desired reponse as well which I will share now. 
-Hold on until I share all the details. lets get this lambda working as expected first.
+output:
+
+{
+  "statusCode": 200,
+  "body": {
+    "tenant_prefix": "69fc3147",
+    "matched_tenants": [
+      "69fc3147-13de-4648-ad3d-22c45883b06f"
+    ],
+    "total_spend": 101.67,
+    "usage_percent": 10.17,
+    "service_breakdown": {
+      "AWS End User Messaging": 9.06,
+      "AWS Key Management Service": 0.32,
+      "AWS Lambda": 0.01,
+      "AWS Secrets Manager": 0.26,
+      "Amazon API Gateway": 0,
+      "Amazon CloudFront": 0.13,
+      "Amazon DocumentDB (with MongoDB compatibility)": 9.47,
+      "Amazon EC2 Container Registry (ECR)": 0.05,
+      "Amazon ElastiCache": 1.99,
+      "Amazon Elastic Container Service": 2.9,
+      "Amazon Elastic Load Balancing": 13.98,
+      "Amazon Kinesis Firehose": 0,
+      "Amazon Lex": 0.04,
+      "Amazon Relational Database Service": 56.47,
+      "Amazon Route 53": 0.89,
+      "Amazon SageMaker": 5.54,
+      "Amazon Simple Email Service": 0.01,
+      "Amazon Simple Notification Service": 0,
+      "Amazon Simple Queue Service": 0.53,
+      "Amazon Simple Storage Service": 0.02,
+      "AmazonCloudWatch": 0.02
+    }
+  }
+}
+
+
+so this is working as expected. I dont think we need any changes here as of now. what we need to do is update the jenkins file to invoke both of these lambdas
+seperately and the store the ouput and send emails accordingly.
