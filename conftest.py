@@ -142,3 +142,13 @@ def lambda_handler(event, context):
     except Exception as e:
         print(f"Error: {str(e)}")
         raise
+
+
+
+No, the current lambda is not working, this is working when we give this payload:
+
+{
+  "tenant_prefix": " "
+}
+
+
