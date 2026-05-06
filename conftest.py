@@ -1,5 +1,3 @@
-then how was this working, here also we are doing filtering only right:
-
 import boto3
 import os
 from datetime import date
@@ -7,13 +5,13 @@ from datetime import date
 ce = boto3.client('ce')
 
 LIMIT = float(os.environ.get("LIMIT", 1000))
-THRESHOLD = float(os.environ.get("THRESHOLD", 70))
-
 TAG_KEY = "sb:cost:tenant"
 
 
-def get_matching_tenants(prefix, start, end):
-    """Fetch all tenant tag values and filter by prefix (with pagination)"""
+# ---------------------------------------------------
+# GET ALL TAGS
+# ---------------------------------------------------
+def get_all_tenant_tags(start, end):
     all_tags = []
     next_token = None
 
@@ -36,14 +34,27 @@ def get_matching_tenants(prefix, start, end):
         if not next_token:
             break
 
-    print(f"All tenant tags count: {len(all_tags)}")
-
-    matched = [t for t in all_tags if t.startswith(prefix)]
-    print(f"Matched tenants for prefix '{prefix}': {matched}")
-
-    return matched
+    return sorted(set(all_tags))
 
 
+# ---------------------------------------------------
+# GET COST GROUPED BY SERVICE + TAG
+# ---------------------------------------------------
+def get_cost_grouped(start, end):
+    return ce.get_cost_and_usage(
+        TimePeriod={'Start': start, 'End': end},
+        Granularity='MONTHLY',
+        Metrics=['UnblendedCost'],
+        GroupBy=[
+            {"Type": "DIMENSION", "Key": "SERVICE"},
+            {"Type": "TAG", "Key": TAG_KEY}
+        ]
+    )
+
+
+# ---------------------------------------------------
+# LAMBDA HANDLER
+# ---------------------------------------------------
 def lambda_handler(event, context):
     try:
         tenant_prefix = event.get("tenant_prefix")
@@ -54,86 +65,77 @@ def lambda_handler(event, context):
         start = date.today().replace(day=1).strftime('%Y-%m-%d')
         end = date.today().strftime('%Y-%m-%d')
 
-        print(f"Fetching cost for tenant prefix: {tenant_prefix}")
+        print(f"Execution for prefix: {tenant_prefix}")
 
-        # 🔍 Step 1: Get matching tenants
-        tenant_values = get_matching_tenants(tenant_prefix, start, end)
+        # =====================================================
+        # STEP 1: ALL TAG VALUES
+        # =====================================================
+        all_tags = get_all_tenant_tags(start, end)
 
-        if not tenant_values:
-            print("No matching tenants found")
-            return {
-                "statusCode": 200,
-                "body": {
-                    "tenant_prefix": tenant_prefix,
-                    "matched_tenants": [],
-                    "total_spend": 0,
-                    "usage_percent": 0,
-                    "service_breakdown": {}
-                }
-            }
+        matched_tenants = [
+            t for t in all_tags
+            if t.startswith(tenant_prefix)
+        ]
 
-        # -----------------------------
-        # 2️⃣ SERVICE BREAKDOWN + TOTAL (single API call)
-        # -----------------------------
-        service_response = ce.get_cost_and_usage(
-            TimePeriod={'Start': start, 'End': end},
-            Granularity='MONTHLY',
-            Metrics=['UnblendedCost'],
-            GroupBy=[
-                {"Type": "DIMENSION", "Key": "SERVICE"}
-            ],
-            Filter={
-                "Tags": {
-                    "Key": TAG_KEY,
-                    "Values": tenant_values
-                }
-            }
-        )
+        # =====================================================
+        # STEP 2: COST DATA (TAG + SERVICE)
+        # =====================================================
+        response = get_cost_grouped(start, end)
 
-        service_costs = {}
-        total_amount = 0
+        tenant_breakdown = {}
+        total_tagged_cost = 0
 
-        results = service_response.get('ResultsByTime', [])
+        unallocated_breakdown = {}
+        total_unallocated_cost = 0
+
+        results = response.get('ResultsByTime', [])
 
         if results:
             for group in results[0].get('Groups', []):
-                service_name = group['Keys'][0]
+
+                service = group['Keys'][0]
+                tag_value = group['Keys'][1] if len(group['Keys']) > 1 else None
+
                 cost = float(group['Metrics']['UnblendedCost']['Amount'])
 
-                if cost > 0:
-                    rounded_cost = round(cost, 2)
-                    service_costs[service_name] = rounded_cost
-                    total_amount += cost
+                # =====================================================
+                # UNALLOCATED = NO TAG VALUE (THIS IS THE KEY FIX)
+                # =====================================================
+                if tag_value is None or tag_value == "":
+                    unallocated_breakdown[service] = round(
+                        unallocated_breakdown.get(service, 0) + cost, 2
+                    )
+                    total_unallocated_cost += cost
 
-        total_amount = round(total_amount, 2)
+                else:
+                    tenant_breakdown[service] = round(
+                        tenant_breakdown.get(service, 0) + cost, 2
+                    )
+                    total_tagged_cost += cost
 
-        percent = (total_amount / LIMIT) * 100 if LIMIT > 0 else 0
-        percent = round(percent, 2)
+        # =====================================================
+        # FINAL TOTAL
+        # =====================================================
+        total_spend = round(total_tagged_cost + total_unallocated_cost, 2)
+        usage_percent = round((total_spend / LIMIT) * 100, 2) if LIMIT else 0
 
-        # -----------------------------
-        # 📊 Logs (for debugging only)
-        # -----------------------------
-        print("\n=== TENANT SUMMARY ===")
-        print(f"Prefix: {tenant_prefix}")
-        print(f"Matched Tenants: {tenant_values}")
-        print(f"Total Spend: ${total_amount}")
-        print(f"Usage: {percent}% of ${LIMIT}")
-
-        print("\n=== SERVICE BREAKDOWN ===")
-        for svc, cost in service_costs.items():
-            print(f"{svc} → ${cost}")
-
-        # -----------------------------
-        # ✅ Final Response
-        # -----------------------------
+        # =====================================================
+        # RESPONSE
+        # =====================================================
         return {
             "statusCode": 200,
             "body": {
                 "tenant_prefix": tenant_prefix,
-                "matched_tenants": tenant_values,
-                "total_spend": total_amount,
-                "usage_percent": percent,
-                "service_breakdown": service_costs
+                "all_tag_values": all_tags,
+                "matched_tenants": matched_tenants,
+
+                "total_spend": total_spend,
+                "usage_percent": usage_percent,
+
+                "tenant_service_breakdown": tenant_breakdown,
+                "unallocated_service_breakdown": unallocated_breakdown,
+
+                "unallocated_cost": round(total_unallocated_cost, 2)
             }
         }
 
