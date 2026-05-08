@@ -1,190 +1,328 @@
-import boto3
-import os
-from datetime import date
+properties([
+    parameters([
+        choice(name: 'CUSTOMER', choices: ['absa','lfs'], description: 'Which Customer'),
+        string(name: 'BRANCH', defaultValue: 'absa-new', description: 'Provide branch you want to build from'),
+        string(name: 'TAG_OVERRIDE', defaultValue: '', description: 'Provide a specific tag to override build number'),
+        booleanParam(name: 'AUTO_DEPLOY_DEV', defaultValue: true, description: 'Auto deploy new image to Dev environment')
+    ])
+])
 
-ce = boto3.client('ce')
+pipeline {
+    agent {
+        label 'cicd'
+    }
 
-LIMIT = float(os.environ.get("LIMIT", 1000))
-THRESHOLD = float(os.environ.get("THRESHOLD", 70))
+    environment {
+        CUSTOMER="${params.CUSTOMER}"
+        BRANCH="${params.BRANCH}"
+        VERSION="${params.VERSION}"
+        ENVIRONMENT="dev"
 
-TAG_KEY = "sb:cost:tenant"
+        OIDC_ROLE_NAME="paymentor-oidc-role"
 
+        REPO_NAME="bu-digital-paymentor-whatsapp-verify-number-app"
+    }
 
-def get_matching_tenants(prefix, start, end):
-    """Fetch all tenant tag values and filter by prefix (with pagination)"""
-    all_tags = []
-    next_token = None
+    stages {
 
-    while True:
-        if next_token:
-            response = ce.get_tags(
-                TimePeriod={'Start': start, 'End': end},
-                TagKey=TAG_KEY,
-                NextPageToken=next_token
-            )
-        else:
-            response = ce.get_tags(
-                TimePeriod={'Start': start, 'End': end},
-                TagKey=TAG_KEY
-            )
+        stage('Get customer mapping') {
+            steps {
+                script {
 
-        all_tags.extend(response.get('Tags', []))
-        next_token = response.get('NextPageToken')
+                    currentBuild.description = "CUSTOMER: ${env.CUSTOMER} \n ENVIRONMENT: ${env.ENVIRONMENT} \n BUILT BY: ${env.BUILD_USER_ID}"
 
-        if not next_token:
-            break
+                    // Default account mappings
+                    def envAccountMap = [
+                        dev: '607436280417',
+                        uat: '658960620175',
+                        prod: '016795361898'
+                    ]
 
-    print(f"All tenant tags count: {len(all_tags)}")
+                    def envAccountMapLFS = [
+                        dev: '116981803571',
+                        uat: '216989139664',
+                        prod: '767828744639'
+                    ]
 
-    matched = [t for t in all_tags if t.startswith(prefix)]
-    print(f"Matched tenants for prefix '{prefix}': {matched}")
+                    def envAccountMapHSBC = [
+                        dev: '088082905288',
+                        uat: '793586321398',
+                        prod: '501957928506'
+                    ]
 
-    return matched
+                    def envAccountMapFDR = [
+                        dev: '975949451286',
+                        uat: '069295248160',
+                        prod: '609714460132'
+                    ]
 
+                    // ABSA mapping
+                    def envAccountMapABSA = [
+                        dev: '975359590581'
+                    ]
 
-def lambda_handler(event, context):
-    try:
-        tenant_prefix = event.get("tenant_prefix")
+                    // Select account map
+                    def selectedMap
 
-        if not tenant_prefix:
-            raise ValueError("tenant_prefix is required")
+                    if (params.CUSTOMER == 'lfs') {
 
-        start = date.today().replace(day=1).strftime('%Y-%m-%d')
-        end = date.today().strftime('%Y-%m-%d')
+                        selectedMap = envAccountMapLFS
 
-        print(f"Fetching cost for tenant prefix: {tenant_prefix}")
+                    } else if (params.CUSTOMER == 'hsbcinm' || params.CUSTOMER == 'hsbcmyh') {
 
-        # 🔍 Step 1: Get matching tenants
-        tenant_values = get_matching_tenants(tenant_prefix, start, end)
+                        selectedMap = envAccountMapHSBC
 
-        if not tenant_values:
-            print("No matching tenants found")
-            return {
-                "statusCode": 200,
-                "body": {
-                    "tenant_prefix": tenant_prefix,
-                    "matched_tenants": [],
-                    "total_spend": 0,
-                    "usage_percent": 0,
-                    "service_breakdown": {}
+                    } else if (params.CUSTOMER == 'fdr') {
+
+                        selectedMap = envAccountMapFDR
+
+                    } else if (params.CUSTOMER == 'absa') {
+
+                        selectedMap = envAccountMapABSA
+
+                    } else {
+
+                        selectedMap = envAccountMap
+                    }
+
+                    env.AWS_ACCOUNT_ID = selectedMap[env.ENVIRONMENT]
+
+                    // Region selection
+                    if (params.CUSTOMER == 'lfs') {
+
+                        env.AWS_REGION = 'ap-southeast-2'
+
+                    } else if (params.CUSTOMER == 'fdr') {
+
+                        env.AWS_REGION = 'ca-central-1'
+
+                    } else if (params.CUSTOMER == 'absa') {
+
+                        env.AWS_REGION = 'eu-west-2'
+
+                    } else {
+
+                        env.AWS_REGION = 'us-east-1'
+                    }
+
+                    // IAM Role
+                    env.AWS_ROLE_ARN = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
+
+                    // Tenant mapping
+                    env.TENANT_ENV = sh(
+                        script: """
+                            jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_env' resources/customer-mapping/${CUSTOMER}.json
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    env.TENANT_ID = sh(
+                        script: """
+                            jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_id' resources/customer-mapping/${CUSTOMER}.json
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                        // 🔥 IMAGE TAG RESOLUTION (FINAL SAFE VERSION)
+            if (params.UPLOAD_NEW_IMAGE) {
+                env.IMAGE_TAG_FINAL = env.BUILD_NUMBER
+                echo "Using NEW image tag (build number): ${env.IMAGE_TAG_FINAL}"
+
+            } else if (params.IMAGE_TAG?.trim()) {
+                env.IMAGE_TAG_FINAL = params.IMAGE_TAG
+                echo "Using PROVIDED image tag: ${env.IMAGE_TAG_FINAL}"
+
+            } else {
+                echo "Attempting to fetch latest image tag from ECR..."
+
+                def fetchedTag = ""
+
+           withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+   fetchedTag = sh(
+    script: """
+        aws ecr describe-images \
+          --repository-name sb-psdev-d37f6745-whatsapp_service_ui \
+          --region ${AWS_REGION} \
+          --query "imageDetails[?imageTags!=null].imageTags[]" \
+          --output text | tr '\\t' '\\n' | grep -v latest | sort -nr | head -n 1
+    """,
+    returnStdout: true
+).trim()
+}
+
+                if (!fetchedTag || fetchedTag == "None") {
+                    echo "⚠️ ECR repo not found or no images exist. Falling back to BUILD_NUMBER"
+                    env.IMAGE_TAG_FINAL = env.BUILD_NUMBER
+                } else {
+                    env.IMAGE_TAG_FINAL = fetchedTag
+                    echo "Using LATEST ECR image tag: ${env.IMAGE_TAG_FINAL}"
                 }
             }
 
-        # -----------------------------
-        # 2️⃣ SERVICE BREAKDOWN + TOTAL (single API call)
-        # -----------------------------
-        service_response = ce.get_cost_and_usage(
-            TimePeriod={'Start': start, 'End': end},
-            Granularity='MONTHLY',
-            Metrics=['UnblendedCost'],
-            GroupBy=[
-                {"Type": "DIMENSION", "Key": "SERVICE"}
-            ],
-            Filter={
-                "Tags": {
-                    "Key": TAG_KEY,
-                    "Values": tenant_values
+                  
+
+                    // Logs
+                    echo "Selected ENVIRONMENT: ${ENVIRONMENT}"
+                    echo "Mapped AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID}"
+                    echo "AWS_ROLE_ARN: ${AWS_ROLE_ARN}"
+                    echo "AWS_REGION: ${AWS_REGION}"
+                    echo "TENANT_ID: ${TENANT_ID}"
+                    echo "TENANT_ENV: ${TENANT_ENV}"
+                    echo "FINAL IMAGE TAG: ${IMAGE_TAG_FINAL}"
                 }
-            }
-        )
-
-        service_costs = {}
-        total_amount = 0
-
-        results = service_response.get('ResultsByTime', [])
-
-        if results:
-            for group in results[0].get('Groups', []):
-                service_name = group['Keys'][0]
-                cost = float(group['Metrics']['UnblendedCost']['Amount'])
-
-                if cost > 0:
-                    rounded_cost = round(cost, 2)
-                    service_costs[service_name] = rounded_cost
-                    total_amount += cost
-
-        total_amount = round(total_amount, 2)
-
-        percent = (total_amount / LIMIT) * 100 if LIMIT > 0 else 0
-        percent = round(percent, 2)
-
-        # -----------------------------
-        # 📊 Logs (for debugging only)
-        # -----------------------------
-        print("\n=== TENANT SUMMARY ===")
-        print(f"Prefix: {tenant_prefix}")
-        print(f"Matched Tenants: {tenant_values}")
-        print(f"Total Spend: ${total_amount}")
-        print(f"Usage: {percent}% of ${LIMIT}")
-
-        print("\n=== SERVICE BREAKDOWN ===")
-        for svc, cost in service_costs.items():
-            print(f"{svc} → ${cost}")
-
-        # -----------------------------
-        # ✅ Final Response
-        # -----------------------------
-        return {
-            "statusCode": 200,
-            "body": {
-                "tenant_prefix": tenant_prefix,
-                "matched_tenants": tenant_values,
-                "total_spend": total_amount,
-                "usage_percent": percent,
-                "service_breakdown": service_costs
             }
         }
 
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        raise
+        stage('Checkout App repo') {
+            steps {
+                script {
+                    sh """
+                        git clone https://ucgithub.exlservice.com/Unified-Cloud-DevOps/${REPO_NAME}
 
+                        cd ${REPO_NAME}
+                        git checkout ${BRANCH}
 
+                        ls -l
+                    """
+                }
+            }
+        }
 
-sample payload:
+        stage('Docker Build & Push') {
+            steps {
+                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
 
-{
-  "tenant_prefix": "69fc3147"
-}
+                    script {
 
+                        sh """
+                            set -e
 
-output:
+                            echo "Building docker image with tag ${IMAGE_TAG_FINAL}"
 
-{
-  "statusCode": 200,
-  "body": {
-    "tenant_prefix": "69fc3147",
-    "matched_tenants": [
-      "69fc3147-13de-4648-ad3d-22c45883b06f"
-    ],
-    "total_spend": 101.67,
-    "usage_percent": 10.17,
-    "service_breakdown": {
-      "AWS End User Messaging": 9.06,
-      "AWS Key Management Service": 0.32,
-      "AWS Lambda": 0.01,
-      "AWS Secrets Manager": 0.26,
-      "Amazon API Gateway": 0,
-      "Amazon CloudFront": 0.13,
-      "Amazon DocumentDB (with MongoDB compatibility)": 9.47,
-      "Amazon EC2 Container Registry (ECR)": 0.05,
-      "Amazon ElastiCache": 1.99,
-      "Amazon Elastic Container Service": 2.9,
-      "Amazon Elastic Load Balancing": 13.98,
-      "Amazon Kinesis Firehose": 0,
-      "Amazon Lex": 0.04,
-      "Amazon Relational Database Service": 56.47,
-      "Amazon Route 53": 0.89,
-      "Amazon SageMaker": 5.54,
-      "Amazon Simple Email Service": 0.01,
-      "Amazon Simple Notification Service": 0,
-      "Amazon Simple Queue Service": 0.53,
-      "Amazon Simple Storage Service": 0.02,
-      "AmazonCloudWatch": 0.02
+                            cd ${REPO_NAME}
+
+                            docker build --no-cache \
+                              -f Dockerfile \
+                              -t ${REPO_NAME}-${IMAGE_TAG_FINAL} .
+
+                            docker tag ${REPO_NAME}-${IMAGE_TAG_FINAL} \
+                              ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/sb-psdev-d37f6745-whatsapp_service_ui:${IMAGE_TAG_FINAL}
+
+                            aws ecr get-login-password --region ${AWS_REGION} | \
+                            docker login --username AWS --password-stdin \
+                              ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+
+                            docker push \
+                              ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/sb-psdev-d37f6745-whatsapp_service_ui:${IMAGE_TAG_FINAL}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('terraform plan') {
+            steps {
+
+                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+
+                    script {
+
+                        ansiColor('xterm') {
+
+                            echo "Using FINAL image tag: ${IMAGE_TAG_FINAL}"
+
+                            sh """
+                                cd ${REPO_NAME}/cicd
+
+                                terraform init -upgrade \
+                                  -backend-config="bucket=${AWS_ACCOUNT_ID}-paymentor-tf-state-mgmt" \
+                                  -backend-config="key=${TENANT_ENV}/${TENANT_ID}/terraform.tfstate"
+
+                                terraform validate
+
+                                terraform plan -out=tfplan \
+                                  -var "customer_id=${TENANT_ID}" \
+                                  -var "image_tag=${IMAGE_TAG_FINAL}" \
+                                  -var "env_id=${TENANT_ENV}" \
+                                  -var "target_env=${ENVIRONMENT}" \
+                                  -var-file="tfvars/${ENVIRONMENT}.tfvars"
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Run terraform Apply?') {
+
+            input {
+                message 'Continue with deploy?'
+                ok 'Approve'
+                submitter "${env.BUILD_USER_ID}"
+            }
+
+            steps {
+                echo "Deployment approved by ${env.BUILD_USER_ID}."
+            }
+        }
+
+        stage('terraform apply') {
+
+            steps {
+
+                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
+
+                    script {
+
+                        ansiColor('xterm') {
+
+                            echo "Applying with IMAGE TAG: ${IMAGE_TAG_FINAL}"
+
+                            sh """
+                                cd ${REPO_NAME}/cicd
+
+                                terraform apply -input=false -auto-approve \
+                                  -var "customer_id=${TENANT_ID}" \
+                                  -var "image_tag=${IMAGE_TAG_FINAL}" \
+                                  -var "env_id=${TENANT_ENV}" \
+                                  -var "target_env=${ENVIRONMENT}" \
+                                  -var-file="tfvars/${ENVIRONMENT}.tfvars"
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Auto Deploy to Dev') {
+
+            when {
+
+                allOf {
+
+                    expression { currentBuild.result != 'ABORTED' }
+
+                    expression { params.AUTO_DEPLOY_DEV }
+                }
+            }
+
+            steps {
+
+                build job: 'BU/Digital/Paymentor/paymentor-ui/whatsapp-ui-deploy',
+                parameters: [
+                    string(name: 'CUSTOMER', value: "${CUSTOMER}"),
+                    string(name: 'ENVIRONMENT', value: "dev"),
+                    string(name: 'IMAGE_TAG', value: "${env.IMAGE_TAG_FINAL}")
+                ]
+            }
+        }
     }
-  }
+
+    post {
+
+        always {
+
+            deleteDir()
+        }
+    }
 }
-
-
-so this is working as expected. I dont think we need any changes here as of now. what we need to do is update the jenkins file to invoke both of these lambdas
-seperately and the store the ouput and send emails accordingly.
