@@ -1,46 +1,60 @@
+**From: **Amit Singh \<Amit.Singh8\@exlservice.com>
+**Date: **Wednesday, 20 August 2025 at 3:55 PM
+**To: **Garvit Airen \<Garvit.Airen\@exlservice.com>; Anuj Singh (Senior Executive) \<Anuj.Singh\@exlservice.com>; Sagain Saowaluck \<Sagain.Saowaluck\@exlservice.com>; Prashant Varma \<Prashant.Varma\@exlservice.com>; David Kelly \<David.Kelly\@exlservice.com>
+**Cc: **Mark Sherlock \<Mark.Sherlock\@exlservice.com>; Deepanshu Agarwal \<Deepanshu.Agarwal\@exlservice.com>
+**Subject: **Automation for Replicating Lambda Layers Across AWS Accounts
+
 Hi Team,
 
-We’ve set up an automated weekly AWS cost summary for Paymentor platforms. Starting [week of DATE / next scheduled run: Monday mornings], you’ll receive these reports by email — no manual action needed.
+Since we have a few new tenants getting onboarded, including some with new AWS accounts, I have developed an automation to replicate Lambda layers across accounts.
 
-I’ve attached sample PROD email screenshots from each platform (PCAAS US, FDR, LFS, and HSBC) so you can see the format, layout, and level of detail before the first live run.
-What this is
-A Jenkins automation runs every Monday and collects AWS spend across accross multiple tenants. It sends a weekly cost summary email per environment (dev, uat, prod) with an Excel attachment for full details.
-This covers:
-Platform
-Scope
-PCAAS US
-All PCAAS US tenants (dev / uat / prod)
-FDR
-FDR platform (dev / uat / prod)
-LFS
-LFS platform (dev / uat / prod)
-HSBC
-HSBC tenants — hsbcinm & hsbcmyh (dev / uat / prod)
-What you’ll receive
-One email per environment (e.g. dev, uat, prod), with:
-Subject format:
-Weekly Cost Summary | [start date] to [end date] | [Platform] | [ENV] | AWS Account [account ID]
-Example: Weekly Cost Summary | 2026-07-01 to 2026-07-29 | PCAAS US | PROD | AWS Account 016795361898
-Email body:
-Grand total spend for that environment (month-to-date)
-Time range: 1st of the month through the report date
-Per-tenant breakdown, sorted by highest spend first
-Top 5 services per tenant (highlighted)
-“Other services” row when a tenant has more than 5 services
-Untagged resources section where applicable
-Excel attachment (weekly-cost-report-{env}.xlsx):
-Summary — tenant totals, usage %, service count
-Details — full service-level breakdown, tenant sections, top 5 highlighted
-The attached screenshots show PROD examples for each platform — same structure you’ll get for dev and uat as well.
-Reporting period
-Costs are month-to-date, not just the past week.
-Example: a report on 29 July covers 1 July – 29 July in the platform’s local timezone.
-Who receives it
-Reports go to the configured distribution list (DevOps / platform leads). If you need to be added or removed, contact [your name / team email].
-Please review the attached PROD samples and share any feedback before [date / first production run].
+This automation will:
 
-Thanks,
+-Save developers from manually adding layers for every new account that gets onboarded, which is time-consuming.
+
+-Ensure consistency across environments, making Lambda deployments smoother without layer-related issues when deploying to a new account.
+
+-Allow developers to replicate layers from any source account to any destination account easily.
+
+
+Here's the job link: [https://ucjenkinsdev.exlservice.com/job/BU/job/Digital/job/Paymentor/job/paymentor-base/job/Publish-layer-automation/](https://ucjenkinsdev.exlservice.com/job/BU/job/Digital/job/Paymentor/job/paymentor-base/job/Publish-layer-automation/)
+
+
+It’s simple to use:
+
+-Provide the **SOURCE\_ACCOUNT** (the account from which layers will be copied).
+-Provide the **DEST\_ACCOUNT** (the account to which layers will be replicated).
+
+
+Here’s the screenshot from the Jenkins job:
+
+[image](cid\:image001.png@01DC11EA.1B193AD0)
+
+
+To control which layers get copied, I’ve created a “Layers.txt” file where we can specify the required layer names:
+
+[https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-digital-paymentor-core-deploy/blob/main/deploy/legacy/Layers.txt](https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-digital-paymentor-core-deploy/blob/main/deploy/legacy/Layers.txt)
+
+Once the “Layers.txt” file is updated, we just need to run the Jenkins job with the source and destination accounts. The job will handle the rest:
+
+- It will use the exact “layer version” and “Compatible runtimes” from the source account.
+- It will replicate all other configurations as is, without any changes.
+
+
+I have already used this automation to replicate layers from PCAAS accounts to the HSBC India account, and it is working as expected.
+
+Please feel free to reach out if you have any questions.
+
+Regards,
 Amit Singh
 
 
-Get Outlook for Mac
+
+so this was one automation we did and sent last year.
+but post that, there have been addition in the team members, and dev teams have not really been utlising this automation and reaching out to us for the layer replication.
+this was meant to be self service and should be utilised by the dev teams
+
+
+
+so I am sending a new email to re-iterate on this so that people are utliusiung this automation 
+what do I send?
