@@ -1,60 +1,34 @@
-**From: **Amit Singh \<Amit.Singh8\@exlservice.com>
-**Date: **Wednesday, 20 August 2025 at 3:55 PM
-**To: **Garvit Airen \<Garvit.Airen\@exlservice.com>; Anuj Singh (Senior Executive) \<Anuj.Singh\@exlservice.com>; Sagain Saowaluck \<Sagain.Saowaluck\@exlservice.com>; Prashant Varma \<Prashant.Varma\@exlservice.com>; David Kelly \<David.Kelly\@exlservice.com>
-**Cc: **Mark Sherlock \<Mark.Sherlock\@exlservice.com>; Deepanshu Agarwal \<Deepanshu.Agarwal\@exlservice.com>
-**Subject: **Automation for Replicating Lambda Layers Across AWS Accounts
+Hi Prashant,
 
-Hi Team,
+It appears we won't be able to use paymentor.hsbcph.dev@opiglobal.com for receiving files.
 
-Since we have a few new tenants getting onboarded, including some with new AWS accounts, I have developed an automation to replicate Lambda layers across accounts.
+We have already configured the SES receipt rule in the HSBC PH DEV environment. The SES, S3, and KMS integrations are working correctly, as confirmed by the successful delivery of the AMAZON_SES_SETUP_NOTIFICATION object into the tenant S3 bucket.
 
-This automation will:
+However, when sending a test email to paymentor.hsbcph.dev@opiglobal.com, the message bounced from Microsoft 365 with the error:
 
--Save developers from manually adding layers for every new account that gets onboarded, which is time-consuming.
+550 5.1.10 RecipientNotFound
 
--Ensure consistency across environments, making Lambda deployments smoother without layer-related issues when deploying to a new account.
+This indicates that incoming email for the @opiglobal.com domain is still being routed through Microsoft 365 rather than Amazon SES.
 
--Allow developers to replicate layers from any source account to any destination account easily.
+Although opiglobal.com is verified in SES for outbound email (alerts and Paymentor-generated communications), domain verification alone does not enable inbound email reception. To receive mail through SES, the domain's MX records must point to SES. Updating the MX records for opiglobal.com would redirect all incoming mail away from Microsoft 365, which is not a viable option.
 
+This is consistent with the approach used in 2023, where a dedicated EXL subdomain was created with its own MX record pointing to:
 
-Here's the job link: [https://ucjenkinsdev.exlservice.com/job/BU/job/Digital/job/Paymentor/job/paymentor-base/job/Publish-layer-automation/](https://ucjenkinsdev.exlservice.com/job/BU/job/Digital/job/Paymentor/job/paymentor-base/job/Publish-layer-automation/)
+inbound-smtp.us-east-1.amazonaws.com
 
+HSBC was then provided with an email address under that dedicated receiving subdomain.
 
-It’s simple to use:
+To move forward, we will need support from the Cloud/DNS team to:
 
--Provide the **SOURCE\_ACCOUNT** (the account from which layers will be copied).
--Provide the **DEST\_ACCOUNT** (the account to which layers will be replicated).
+Create a dedicated receiving subdomain (for example, inbound.opiglobal.com).
+Configure its MX record to point to Amazon SES (us-east-1).
+Associate it with AWS account 088082905288.
 
+Once this is in place, we can update the SES receipt rule to use:
 
-Here’s the screenshot from the Jenkins job:
+paymentor.hsbcph.dev@<receiving-subdomain>
 
-[image](cid\:image001.png@01DC11EA.1B193AD0)
+and perform end-to-end testing again.
 
-
-To control which layers get copied, I’ve created a “Layers.txt” file where we can specify the required layer names:
-
-[https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-digital-paymentor-core-deploy/blob/main/deploy/legacy/Layers.txt](https://ucgithub.exlservice.com/Unified-Cloud-DevOps/bu-digital-paymentor-core-deploy/blob/main/deploy/legacy/Layers.txt)
-
-Once the “Layers.txt” file is updated, we just need to run the Jenkins job with the source and destination accounts. The job will handle the rest:
-
-- It will use the exact “layer version” and “Compatible runtimes” from the source account.
-- It will replicate all other configurations as is, without any changes.
-
-
-I have already used this automation to replicate layers from PCAAS accounts to the HSBC India account, and it is working as expected.
-
-Please feel free to reach out if you have any questions.
-
-Regards,
-Amit Singh
-
-
-
-so this was one automation we did and sent last year.
-but post that, there have been addition in the team members, and dev teams have not really been utlising this automation and reaching out to us for the layer replication.
-this was meant to be self service and should be utilised by the dev teams
-
-
-
-so I am sending a new email to re-iterate on this so that people are utliusiung this automation 
-what do I send?
+Thanks,
+ Amit
