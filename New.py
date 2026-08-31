@@ -1,328 +1,63 @@
-properties([
-    parameters([
-        choice(name: 'CUSTOMER', choices: ['absa','lfs'], description: 'Which Customer'),
-        string(name: 'BRANCH', defaultValue: 'absa-new', description: 'Provide branch you want to build from'),
-        string(name: 'TAG_OVERRIDE', defaultValue: '', description: 'Provide a specific tag to override build number'),
-        booleanParam(name: 'AUTO_DEPLOY_DEV', defaultValue: true, description: 'Auto deploy new image to Dev environment')
-    ])
-])
-
-pipeline {
-    agent {
-        label 'cicd'
-    }
-
-    environment {
-        CUSTOMER="${params.CUSTOMER}"
-        BRANCH="${params.BRANCH}"
-        VERSION="${params.VERSION}"
-        ENVIRONMENT="dev"
-
-        OIDC_ROLE_NAME="paymentor-oidc-role"
-
-        REPO_NAME="bu-digital-paymentor-whatsapp-verify-number-app"
-    }
-
-    stages {
-
-        stage('Get customer mapping') {
-            steps {
-                script {
-
-                    currentBuild.description = "CUSTOMER: ${env.CUSTOMER} \n ENVIRONMENT: ${env.ENVIRONMENT} \n BUILT BY: ${env.BUILD_USER_ID}"
-
-                    // Default account mappings
-                    def envAccountMap = [
-                        dev: '607436280417',
-                        uat: '658960620175',
-                        prod: '016795361898'
-                    ]
-
-                    def envAccountMapLFS = [
-                        dev: '116981803571',
-                        uat: '216989139664',
-                        prod: '767828744639'
-                    ]
-
-                    def envAccountMapHSBC = [
-                        dev: '088082905288',
-                        uat: '793586321398',
-                        prod: '501957928506'
-                    ]
-
-                    def envAccountMapFDR = [
-                        dev: '975949451286',
-                        uat: '069295248160',
-                        prod: '609714460132'
-                    ]
-
-                    // ABSA mapping
-                    def envAccountMapABSA = [
-                        dev: '975359590581'
-                    ]
-
-                    // Select account map
-                    def selectedMap
-
-                    if (params.CUSTOMER == 'lfs') {
-
-                        selectedMap = envAccountMapLFS
-
-                    } else if (params.CUSTOMER == 'hsbcinm' || params.CUSTOMER == 'hsbcmyh') {
-
-                        selectedMap = envAccountMapHSBC
-
-                    } else if (params.CUSTOMER == 'fdr') {
-
-                        selectedMap = envAccountMapFDR
-
-                    } else if (params.CUSTOMER == 'absa') {
-
-                        selectedMap = envAccountMapABSA
-
-                    } else {
-
-                        selectedMap = envAccountMap
-                    }
-
-                    env.AWS_ACCOUNT_ID = selectedMap[env.ENVIRONMENT]
-
-                    // Region selection
-                    if (params.CUSTOMER == 'lfs') {
-
-                        env.AWS_REGION = 'ap-southeast-2'
-
-                    } else if (params.CUSTOMER == 'fdr') {
-
-                        env.AWS_REGION = 'ca-central-1'
-
-                    } else if (params.CUSTOMER == 'absa') {
-
-                        env.AWS_REGION = 'eu-west-2'
-
-                    } else {
-
-                        env.AWS_REGION = 'us-east-1'
-                    }
-
-                    // IAM Role
-                    env.AWS_ROLE_ARN = "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${OIDC_ROLE_NAME}"
-
-                    // Tenant mapping
-                    env.TENANT_ENV = sh(
-                        script: """
-                            jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_env' resources/customer-mapping/${CUSTOMER}.json
-                        """,
-                        returnStdout: true
-                    ).trim()
-
-                    env.TENANT_ID = sh(
-                        script: """
-                            jq -r --arg env "${ENVIRONMENT}" '.[\$env].tenant_id' resources/customer-mapping/${CUSTOMER}.json
-                        """,
-                        returnStdout: true
-                    ).trim()
-
-                        // 🔥 IMAGE TAG RESOLUTION (FINAL SAFE VERSION)
-            if (params.UPLOAD_NEW_IMAGE) {
-                env.IMAGE_TAG_FINAL = env.BUILD_NUMBER
-                echo "Using NEW image tag (build number): ${env.IMAGE_TAG_FINAL}"
-
-            } else if (params.IMAGE_TAG?.trim()) {
-                env.IMAGE_TAG_FINAL = params.IMAGE_TAG
-                echo "Using PROVIDED image tag: ${env.IMAGE_TAG_FINAL}"
-
-            } else {
-                echo "Attempting to fetch latest image tag from ECR..."
-
-                def fetchedTag = ""
-
-           withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-   fetchedTag = sh(
-    script: """
-        aws ecr describe-images \
-          --repository-name sb-psdev-d37f6745-whatsapp_service_ui \
-          --region ${AWS_REGION} \
-          --query "imageDetails[?imageTags!=null].imageTags[]" \
-          --output text | tr '\\t' '\\n' | grep -v latest | sort -nr | head -n 1
-    """,
-    returnStdout: true
-).trim()
-}
-
-                if (!fetchedTag || fetchedTag == "None") {
-                    echo "⚠️ ECR repo not found or no images exist. Falling back to BUILD_NUMBER"
-                    env.IMAGE_TAG_FINAL = env.BUILD_NUMBER
-                } else {
-                    env.IMAGE_TAG_FINAL = fetchedTag
-                    echo "Using LATEST ECR image tag: ${env.IMAGE_TAG_FINAL}"
-                }
-            }
-
-                  
-
-                    // Logs
-                    echo "Selected ENVIRONMENT: ${ENVIRONMENT}"
-                    echo "Mapped AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID}"
-                    echo "AWS_ROLE_ARN: ${AWS_ROLE_ARN}"
-                    echo "AWS_REGION: ${AWS_REGION}"
-                    echo "TENANT_ID: ${TENANT_ID}"
-                    echo "TENANT_ENV: ${TENANT_ENV}"
-                    echo "FINAL IMAGE TAG: ${IMAGE_TAG_FINAL}"
-                }
-            }
-        }
-
-        stage('Checkout App repo') {
-            steps {
-                script {
-                    sh """
-                        git clone https://ucgithub.exlservice.com/Unified-Cloud-DevOps/${REPO_NAME}
-
-                        cd ${REPO_NAME}
-                        git checkout ${BRANCH}
-
-                        ls -l
-                    """
-                }
-            }
-        }
-
-        stage('Docker Build & Push') {
-            steps {
-                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-
-                    script {
-
-                        sh """
-                            set -e
-
-                            echo "Building docker image with tag ${IMAGE_TAG_FINAL}"
-
-                            cd ${REPO_NAME}
-
-                            docker build --no-cache \
-                              -f Dockerfile \
-                              -t ${REPO_NAME}-${IMAGE_TAG_FINAL} .
-
-                            docker tag ${REPO_NAME}-${IMAGE_TAG_FINAL} \
-                              ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/sb-psdev-d37f6745-whatsapp_service_ui:${IMAGE_TAG_FINAL}
-
-                            aws ecr get-login-password --region ${AWS_REGION} | \
-                            docker login --username AWS --password-stdin \
-                              ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-
-                            docker push \
-                              ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/sb-psdev-d37f6745-whatsapp_service_ui:${IMAGE_TAG_FINAL}
-                        """
-                    }
-                }
-            }
-        }
-
-        stage('terraform plan') {
-            steps {
-
-                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-
-                    script {
-
-                        ansiColor('xterm') {
-
-                            echo "Using FINAL image tag: ${IMAGE_TAG_FINAL}"
-
-                            sh """
-                                cd ${REPO_NAME}/cicd
-
-                                terraform init -upgrade \
-                                  -backend-config="bucket=${AWS_ACCOUNT_ID}-paymentor-tf-state-mgmt" \
-                                  -backend-config="key=${TENANT_ENV}/${TENANT_ID}/terraform.tfstate"
-
-                                terraform validate
-
-                                terraform plan -out=tfplan \
-                                  -var "customer_id=${TENANT_ID}" \
-                                  -var "image_tag=${IMAGE_TAG_FINAL}" \
-                                  -var "env_id=${TENANT_ENV}" \
-                                  -var "target_env=${ENVIRONMENT}" \
-                                  -var-file="tfvars/${ENVIRONMENT}.tfvars"
-                            """
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Run terraform Apply?') {
-
-            input {
-                message 'Continue with deploy?'
-                ok 'Approve'
-                submitter "${env.BUILD_USER_ID}"
-            }
-
-            steps {
-                echo "Deployment approved by ${env.BUILD_USER_ID}."
-            }
-        }
-
-        stage('terraform apply') {
-
-            steps {
-
-                withAWS(role: "${AWS_ROLE_ARN}", useNode: true) {
-
-                    script {
-
-                        ansiColor('xterm') {
-
-                            echo "Applying with IMAGE TAG: ${IMAGE_TAG_FINAL}"
-
-                            sh """
-                                cd ${REPO_NAME}/cicd
-
-                                terraform apply -input=false -auto-approve \
-                                  -var "customer_id=${TENANT_ID}" \
-                                  -var "image_tag=${IMAGE_TAG_FINAL}" \
-                                  -var "env_id=${TENANT_ENV}" \
-                                  -var "target_env=${ENVIRONMENT}" \
-                                  -var-file="tfvars/${ENVIRONMENT}.tfvars"
-                            """
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Auto Deploy to Dev') {
-
-            when {
-
-                allOf {
-
-                    expression { currentBuild.result != 'ABORTED' }
-
-                    expression { params.AUTO_DEPLOY_DEV }
-                }
-            }
-
-            steps {
-
-                build job: 'BU/Digital/Paymentor/paymentor-ui/whatsapp-ui-deploy',
-                parameters: [
-                    string(name: 'CUSTOMER', value: "${CUSTOMER}"),
-                    string(name: 'ENVIRONMENT', value: "dev"),
-                    string(name: 'IMAGE_TAG', value: "${env.IMAGE_TAG_FINAL}")
-                ]
-            }
-        }
-    }
-
-    post {
-
-        always {
-
-            deleteDir()
-        }
-    }
-}
+WhatsApp Video 2026-08-31 at 11.28.47 PM
+31 Aug 2026, 23:31
+WhatsApp Video 2026-08-31 at 11.28.47 PM
+Play
+
+
+00:00
+17:22
+Mute
+
+Settings
+(0:13) We can keep all the images, all the tools in our control, which are actually doing the deployment. (0:36) We can host those things in our environment and even Argo CD we can host in our environment. (0:44) And you just need read access to Kubernetes, where we can go and see if the deployment is actually happening correctly or not.
+(0:54) What you are now saying, you are now starting to understand that it is not that we have given all the control to them. (1:04) They will only have the deployment part because it comes under the DevOps or infrastructure. (1:12) If we go to involve the cloud team on the client side, then it will be done.
+(1:15) No, no, let's handle this whole thing from our end. (1:18) That's why we also need to think about that we have containerised our Docker image. (1:24) Everything is done.
+Everything we are managing, we are maintaining. (1:29) The idea is that the end product, whatever is the containerised image, whatever it is, we should be able to ship it there. (1:39) Push it to the client side.
+(1:41) Understood, understood. (1:42) Like you are also running your Jenkins job and its build is being created, it is going to the folder. (1:49) So you have all the control of Jenkins.
+(1:53) So the client should only care about the output and whatever it is in its environment, it should be deployed there. (2:01) We will only do the changes, we will only manage, we will only control everything because it is our proprietary code or whatever is the technology that we are using. (2:13) Why will we tell? (2:14) Sounds good.
+(2:15) So that's it. (2:17) To start with, I think we are good. (2:20) I mean, it is already defined how we can do it.
+(2:23) So whatever idea we have so far, you try and come up with it. (2:29) You have to make PPT, you have to do one-pager, you have to do diagrammatic, just figure it out. (2:36) So that when we go on a call with him tomorrow, we have something to talk about and there will be a discussion.
+(2:42) So we can also highlight that whatever is our containerised so far, there are only two things. (2:47) Which is your either whatever you are deploying ECS. (2:53) ECS is also deployed for two things.
+(2:55) One is for your payment or UI and agent. (2:58) UI and then WhatsApp. (3:00) Agentic also.
+(3:02) This is there. (3:03) But apart from this, whatever he has shown here that the modules that he is saying, so we can figure it out how and what to do. (3:16) That's something David will have to let us know that how he is going to keep the application code.
+(3:23) Because if he tells us, then half of the things will be solved there. (3:26) Yes, that's what I am saying that it is very overlapping. (3:31) It may be that his understanding is not able to think as we are thinking.
+(3:38) Yes, once he let us know that how he is going to manage. (3:41) No, but now it is the other way around. (3:43) It is now that he is saying that we will tell you how we will do deployment.
+(3:49) So that's why you forget the part of David. (3:52) Whatever you understand, you give your idea, you give your thought process that this is what I have come up with. (4:02) Then by involving David, there will be a discussion with him.
+(4:07) It is a step by step. (4:09) It is not that both of us, you and I can decide and conclude. (4:15) Jenkins will keep living where it is living.
+(4:17) Like Jenkins won't, like where we are hosted now, Jenkins will be the same. (4:24) No, no Jenkins doesn't mean anything. (4:27) Whatever is going on, it will work.
+(4:28) In this, it will be that now assume that our HSBC is Mexico and HSBC is UAE. (4:35) So that client said that I want a paymenter, but I will not use your infrastructure. (4:41) I would want you to deploy it in my environment.
+(4:45) Now their environment could be, let's say, an AWS account. (4:50) It could be a Google Cloud. (4:52) It could be Azure Cloud.
+(4:55) That is how and what the senior leadership is thinking on these lines. (5:03) So that's why I'm saying, let's not get into Azure and GCP. (5:08) Let's only concentrate on AWS.
+(5:11) Let's say HSBC said that I want to do it in Mexico and I have AWS. (5:18) I don't want to use your AWS platform. (5:21) I want you to come and deploy everything in our AWS environment.
+(5:28) Now, what all would you need to do? (5:33) For that, they said that if we containerise it and give it to them, (5:39) so someone from our team initially can help configure and set up everything. (5:46) That is one idea what they have. (5:48) Further, I am saying that if there is any way, (5:51) if we are able to get access to their environment.
+(5:56) That is something we will need. (6:00) No, no, when I say get access, I mean, like some other tools that we use. (6:07) And we don't physically go inside their AWS accounts or anything.
+(6:12) Like when you are deploying yourself from Jenkins to AWS account, (6:15) you don't log in, the pipeline is running. (6:19) Similarly, you think about something that if you require access, (6:24) whatever tool you are using here, (6:26) let's say as an example, you are using Jenkins to deploy, (6:32) but you should have access at the end too, (6:35) to deploy from your Jenkins pipeline. (6:38) That is needed, that is needed for sure.
+(6:42) So, whatever is required, we will have to highlight it. (6:46) Okay, we have done it from our end, we have containerised it, everything is done. (6:50) We are prepared with the plan.
+(6:52) But now, the next step is, how do we take it to the client? (6:57) Okay, we have made images, but by making images, (7:00) we will not send it on email or do something like that. (7:03) Who will do it further? (7:04) So, that will break down into two parts. (7:07) One is, we will work on call with the client (7:13) and whatever will be their point of contact, (7:15) we will tell them to follow this step or document it.
+(7:19) We will tell them how to do it, that is one. (7:21) Number two would be that we get access to their environment. (7:26) That could be that we go in manually and start doing something (7:31) or we are given some programmatic access (7:35) through which we are able to manage everything, (7:40) deploy everything, get a status of completion, (7:45) that everything is done and then we move out (7:48) and if there is to be any new change, (7:52) that too as a feature we are able to deploy.
+(7:55) Right, right, right. Okay. (7:57) All those images will sit with us.
+(8:00) Whatever Docker image we have made, (8:03) we are just pushing it there. (8:04) But if there is to be any modification or feature update, (8:08) the version of the image will change. (8:10) We will only handle it, the client will not do it.
+(8:12) Yes, and we will have to see that too. (8:15) That is the idea. (8:16) Where will the image be kept? (8:18) Are we going to still keep using ECR to store images? (8:22) No, those are all questions that you should highlight it (8:26) in the initial stages, steps.
+(8:27) This is what is the initial part. (8:33) I have thought that it is feasible, (8:36) but within this, list out these things for me (8:40) that I would want an answer to these things (8:44) and also I have these options or suggestions (8:48) that we can do this and that. (8:49) Correct, correct.
+(8:51) There are only two ways for it. (8:52) Either you say that I have highlighted this, (8:55) now I don't know what it is (8:57) or I have highlighted this. (8:59) I can think of two or three options in it.
+(9:01) So from this, we need to finalise and make (9:04) which would be the most suitable. (9:07) Suitable option, yes, yes. (9:08) Okay, okay, Prashant.
+(9:10) Got it, got it. (9:12) We will have to do a little bit like this. (9:15) Then it will have some initial.
+(9:19) Because look, there will be no magic. (9:21) In this too, he said, do it in waves. (9:24) I say that you do what has happened.
+(9:27) I mean, if you do the whole breakdown, (9:30) so this, how does this entire thing work? (9:34) It works on your different modules. (9:38) Until you don't have a file, (9:40) how will the story move forward? (9:42) Right. (9:43) Now, like you have the first thing from me (9:46) is that your file should come.
+(9:47) To do this, (9:52) another thing to ponder about would be that (9:55) it will be the environment of the client. (9:58) So the question of coming to the file does not arise. (10:01) Yes, I mean, if their file.
+(10:03) So SFTP, API or whatever is not there. (10:06) But then you would also need to think (10:09) if they ask us that we want to integrate (10:12) with some other ERP system at our end. (10:15) So how will we do that? (10:18) For that too, we will have to write a docker file.
+(10:22) In which it should be kind of flexible. (10:25) That if let's say that because look, (10:28) the whole process will start with this. (10:31) Until the file comes, (10:33) I mean, this is the number one step here.
+(10:37) From here, the client has sent a file from your SFTP. (10:40) It comes and sits inside this bucket. (10:43) So I am saying that if we do it in the client environment, (10:45) then this SFTP is over.
+(10:48) But then if the client says that I have an ERP system, (10:51) I want to integrate this S3 bucket with that. (10:55) So we will need to provision for that in the docker file. (11:00) How will it be integrated? (11:03) What requirements should be there in it? (11:05) Right, right.
+(11:07) Then move forward from that. (11:08) go ahead and then you have the ETL module, lambdas, etc. (11:15) So it can be a full docker file.
+(11:18) Again, as you said, that is something what David should come up with. (11:23) But still we can also say that this is what we have thought, right? (11:29) So that ETL module came. (11:31) After ETL, then your next would be, (11:35) because we don't know what they are doing in the ETL module.
+(11:39) But because that work has become application-specific, (11:43) only David will be able to tell it properly. (11:46) Then after ETL, it would be your decisioning. (11:50) And along with the decisioning, your database will also be in the middle.
+(11:54) So the database, like you are deploying via the platform team, (12:01) so then that will also be something that would lie with us. (12:05) That you have provisioned the database, (12:08) but who will make its schema and all those things inside it? (12:13) We don't have that expertise. (12:15) That is also there.
+(12:18) So for that, we need to call that out, (12:22) that we can provide an infrastructure-wise provision using the docker file, right? (12:28) But then what will be the schema inside it? (12:31) What will happen, what will not happen? (12:33) What row, what table? (12:34) That schema is there. (12:35) So who is going to work on that? (12:38) Okay, your part is complete. (12:40) Then after that comes all your communication.
+(12:43) So even in communication, (12:45) he will do the same Lambda, etc. (12:47) Then you have different services. (12:50) So its equivalent, if we are deploying in some other cloud, (12:54) so do we have an option? (12:56) If it is Clio, it is fine.
+(12:58) If it is Agentic AI, which is also fine, (13:00) because it is too early to say that we can also do Agentic AI, (13:06) because we don't even know that yet. (13:08) So we can only cater for that so far, (13:10) that it will be called by API. (13:15) But then each client, (13:16) like one client would be working in a certain way, (13:19) but let's say we do it for another client, (13:22) then everyone will have to make a lot of changes.
+(13:24) Now that is there. (13:26) Suppose one is on GCP and the other is on something else. (13:29) That is there.
+(13:30) So there will be a lot of major changes. (13:31) That's what I was saying, (13:32) but now you are forgetting all three, (13:35) but at least you are working on AWS, (13:38) so if you come up with something for that, (13:41) so what is the date now? (13:42) He says that sometimes where we pitch, (13:45) that client says that I need it in my environment. (13:49) But to get started with it, (13:50) if we say that we need our environment, (13:52) if you have AWS, (13:53) then we can do it immediately (13:55) because we have that capability.
+(13:58) If you are in Azure or GCP, (14:00) it will take us a little time. (14:01) We will need to refactor. (14:03) But that is their long-term, (14:06) that it should be a multi-cloud.
+(14:08) But it is the same that for the starting point, (14:10) it will start from somewhere. (14:13) If it is AWS, (14:15) then I am saying that let's get started with AWS only. (14:17) Then in this, (14:22) whatever communication will happen between them, (14:25) that too will be handled by David from his code.
+(14:29) Now ports will also have to be done, (14:32) that there will be communication in this container, (14:35) so what to do with the port, (14:38) what not to do, (14:39) and which container, (14:42) if something has to be exposed publicly, (14:45) where API is being hosted, (14:46) then all these things will have to be thought about. (14:52) Because this portion can be in the client environment, (14:58) they will say that whatever is its public-facing endpoint, (15:03) so we would have to take the endpoint from them, (15:09) they will tell, (15:10) so to configure it, (15:11) like everything happens on board on WAF, (15:13) so after that, (15:15) like you have deployed ECS, (15:19) load balancer, (15:20) and all those things, (15:20) internal load balancer, (15:22) NLP, NLB, (15:23) so one will need to factor that in, (15:27) if we go to the client environment, (15:29) we don't know how their security is, (15:32) so if something has to be changed in that, (15:35) then we will have to take that too, (15:37) what to do, (15:38) how to do. (15:39) There will be a lot of changes, (15:39) that's true, (15:40) that's true, (15:41) that will also be there, (15:42) so it is like this, (15:45) excuse me, (15:46) it is not that he just told us, (15:48) and now we will do it and give it, (15:50) but it is that we will have to start from somewhere, (15:55) just to show that we have some ideas, (15:58) we also have some kind of things, (16:02) that we have been able to figure out and identify, (16:05) that could be a blocker, (16:08) or a problem to deploy everything completely into the client environment, (16:12) correct, (16:13) okay, (16:14) right, (16:16) okay, (16:17) so this is the thing, (16:19) okay, (16:20) okay, (16:21) right, (16:22) okay, (16:23) let me create one document or something, (16:26) so you have this diagram too, (16:28) you have the code as well, (16:30) so you use both, (16:33) open, (16:33) I would say, (16:34) a fresh, (16:35) do that, (16:35) send me your chat as well, (16:38) the chat board that you were talking about, (16:41) forward the chat to me, (16:43) so do that, (16:45) then you see, (16:46) maybe it will give you a better picture of all these things, (16:50) sure, (16:51) otherwise, (16:52) because in that one, (16:53) as we were seeing before, (16:54) there is so much data, (16:56) so it is getting mixed up, (16:57) it is getting mixed up, (16:58) because the requirement, (17:00) I think now you will understand better, (17:02) what is the end goal and objective, (17:04) yes, (17:05) yes, (17:05) I understood, (17:05) okay, (17:07) send me the chat, (17:08) I will check and start, (17:10) okay, (17:11) okay, (17:12) okay, (17:12) bye,
